@@ -63,7 +63,24 @@ typedef bool(__thiscall* WorldToScreenFn)(CGWorldFrame* worldFrame, const C3Vect
 // Function pointer type for EndScene
 typedef HRESULT(__stdcall* EndSceneFn)(IDirect3DDevice9* device);
 
-// Game memory addresses - Update these for your WoW version
-constexpr uintptr_t WORLDFRAME_PTR = 0x00B7436C;     // Pointer to WorldFrame
+// Player object function pointer types
+typedef void*(__cdecl* GetActivePlayerObjectFn)();
+typedef void(__thiscall* GetPositionFn)(void* pObject, C3Vector* pOutVec);
+
+// Game memory addresses - Original addresses from user's analysis
+constexpr uintptr_t WORLDFRAME_PTR = 0x00B7436C;      // Pointer to WorldFrame
 constexpr uintptr_t WORLDTOSCREEN_ADDR = 0x004F6D20;  // WorldToScreen function
-constexpr uintptr_t LUADOSTRING_ADDR = 0x00819210;    // LuaDoString function (3.3.5a) 
+constexpr uintptr_t LUADOSTRING_ADDR = 0x00819210;    // LuaDoString function
+
+// Local player addresses
+constexpr uintptr_t GET_ACTIVE_PLAYER_OBJECT_ADDR = 0x004038F0; // getActivePlayerObject function
+constexpr uintptr_t PLAYER_GETPOSITION_VTABLE_OFFSET = 0x2C;    // GetPosition virtual function offset
+
+// Runtime address detection functions
+uintptr_t FindWorldFramePtr();
+uintptr_t FindWorldToScreenAddr();
+uintptr_t FindLuaDoStringAddr();
+
+// Player coordinate functions
+C3Vector GetLocalPlayerPosition();
+bool IsValidPlayerPosition(const C3Vector& pos); 

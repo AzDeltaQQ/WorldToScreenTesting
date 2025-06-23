@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(WorldToScreenTesting)
 
+# Force 32-bit compilation
+set(CMAKE_GENERATOR_PLATFORM Win32)
+set(CMAKE_SIZEOF_VOID_P 4)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -25,6 +29,7 @@ set(SOURCES
     dllmain.cpp
     core/hook.cpp
     core/worldtoscreen.cpp
+    core/player.cpp
     ${MINHOOK_SOURCES}
 )
 
@@ -60,7 +65,22 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     _UNICODE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
+    WIN32
+    _WIN32
 )
+
+# Force 32-bit compilation flags
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "This project must be compiled as 32-bit!")
+endif()
+
+# Set 32-bit specific compiler flags
+if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /arch:IA32)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        LINK_FLAGS "/MACHINE:X86 /SAFESEH:NO"
+    )
+endif()
 
 # Set DLL properties
 set_target_properties(${PROJECT_NAME} PROPERTIES
