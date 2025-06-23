@@ -1,75 +1,137 @@
-# WorldToScreen Test DLL
+# WorldToScreen Testing Project
 
-A safe testing framework for WoW's WorldToScreen function with comprehensive crash prevention.
+A World of Warcraft addon testing framework that demonstrates the real WorldToScreen function by sending coordinates to Lua for native UI frame creation.
+
+## Overview
+
+This project hooks into WoW's D3D9 EndScene and uses the actual game's WorldToScreen function to convert 3D world coordinates to 2D screen coordinates. Instead of using ImGui for rendering, it sends the calculated screen coordinates to Lua, which creates native WoW UI frames at the correct positions.
 
 ## Features
 
-- **Safe Initialization**: No WorldToScreen calls during startup
-- **Memory Validation**: Comprehensive pointer validation before any game function calls
-- **Delayed Execution**: 60-frame delay before any WorldToScreen operations
-- **Exception Handling**: Graceful error handling with detailed logging
-- **ImGui Interface**: User-friendly control panel for testing
-- **Real-time Logging**: Debug logging to `worldtoscreen_debug.log`
+- **Real WorldToScreen Integration**: Uses WoW's actual WorldToScreen function at `0x4F6D20`
+- **Native UI Rendering**: Creates WoW UI frames via Lua instead of external rendering
+- **Lua Coordinate Sending**: Sends screen coordinates directly to WoW's Lua environment
+- **Thread-Safe Hook System**: Uses MinHook for safe D3D9 EndScene hooking
+- **Dynamic Arrow Management**: Add/remove arrows with real-time position updates
 
-## Safety Features
+## Technical Details
 
-1. **Startup Protection**: The DLL waits 60 frames after injection before attempting any WorldToScreen calls
-2. **Pointer Validation**: All game pointers are validated using VirtualQuery before access
-3. **Safe Mode**: Enabled by default, prevents WorldToScreen calls unless arrows are manually added
-4. **Bounds Checking**: World positions are validated to be within reasonable ranges
-5. **Memory Safety**: Uses VirtualQuery instead of exception handling for C++ compatibility
+### Architecture
+- **Hook System**: MinHook-based D3D9 EndScene hook
+- **Coordinate Conversion**: Real WoW WorldToScreen function with `__thiscall` convention
+- **UI System**: Lua-generated WoW UI frames positioned at calculated screen coordinates
+- **Memory Safety**: Proper type definitions and memory management
+
+### Key Components
+1. **WorldToScreenManager**: Manages arrow data and coordinates Lua frame creation
+2. **Hook System**: Handles D3D9 EndScene hooking for update timing
+3. **Lua Integration**: Executes Lua code to create and position UI frames
+4. **Arrow Management**: Add, remove, and update arrow positions dynamically
+
+### Memory Addresses (Update for your WoW version)
+```cpp
+constexpr uintptr_t WORLDFRAME_PTR = 0x00B7436C;     // Pointer to WorldFrame
+constexpr uintptr_t WORLDTOSCREEN_ADDR = 0x004F6D20;  // WorldToScreen function
+constexpr uintptr_t LUADOSTRING_ADDR = 0x00819210;    // LuaDoString function
+```
+
+## Building
+
+### Prerequisites
+- Visual Studio 2019 or later
+- CMake 3.20+
+- Windows SDK
+
+### Build Steps
+1. Clone the repository
+2. Open in Visual Studio or use CMake
+3. Build the solution
+4. The DLL will be output to `build/bin/WorldToScreenTesting.dll`
+
+### CMake Command Line
+```bash
+mkdir build
+cd build
+cmake ..
+cmake --build . --config Release
+```
 
 ## Usage
 
-1. **Build**: The DLL is built to `build/bin/Release/WorldToScreenTest.dll`
-2. **Inject**: Use your preferred DLL injector to inject into WoW
-3. **Wait**: The system will initialize safely over 60 frames
-4. **Add Arrows**: Use the ImGui control panel to add test arrows
-5. **Test**: Arrows will only appear if WorldToScreen succeeds
+### Basic Integration
+1. Inject the DLL into World of Warcraft
+2. The system automatically adds test arrows at startup
+3. Arrows appear as green UI frames with labels
 
-## Controls
+### Programmatic Usage
+```cpp
+// Add an arrow at world coordinates
+int arrowId = g_WorldToScreenManager.AddArrow(100.0f, 200.0f, 0.0f, "Test Arrow");
 
-- **INSERT Key**: Toggle the control panel (if implemented)
-- **Add Safe Test Arrows**: Adds arrows at safe positions (0,0,0), (10,0,0), (0,10,0)
-- **Add Arrow**: Manually add arrows at specific world coordinates
-- **Clear All Arrows**: Remove all arrows
-- **Safe Mode**: Toggle safety restrictions
+// Remove an arrow
+g_WorldToScreenManager.RemoveArrow(arrowId);
 
-## Game Addresses Used
+// Clear all arrows
+g_WorldToScreenManager.ClearAllArrows();
+```
 
-- **WorldToScreen Function**: `0x4F6D20`
-- **WorldFrame Pointer**: `0x00B7436C`
+### Lua Frame Creation
+The system automatically generates Lua code like:
+```lua
+local frameName = 'WorldToScreenArrow1';
+local frame = _G[frameName];
+if not frame then
+  frame = CreateFrame('Frame', frameName, UIParent);
+  frame:SetSize(20, 20);
+  local texture = frame:CreateTexture(nil, 'BACKGROUND');
+  texture:SetAllPoints();
+  texture:SetColorTexture(0, 1, 0, 0.8); -- Green color
+  frame.texture = texture;
+  local text = frame:CreateFontString(nil, 'OVERLAY', 'GameFontNormal');
+  text:SetPoint('BOTTOM', frame, 'TOP', 0, 2);
+  text:SetText('Arrow Label');
+  frame.text = text;
+end;
+frame:SetPoint('CENTER', UIParent, 'BOTTOMLEFT', 960.0, 540.0);
+frame:Show();
+```
 
-## Files
+## How It Works
 
-- `core/worldtoscreen.cpp/h`: Main arrow rendering and WorldToScreen interface
-- `core/hook.cpp/h`: D3D9 EndScene hook implementation
-- `core/types.h`: Game structures and function signatures
-- `dllmain.cpp`: DLL entry point
+1. **EndScene Hook**: Captures D3D9 EndScene calls for update timing
+2. **WorldToScreen Call**: Uses real WoW function to convert world coordinates to normalized screen coordinates (0-1)
+3. **Coordinate Conversion**: Multiplies normalized coordinates by screen dimensions for pixel coordinates
+4. **Lua Execution**: Sends Lua code to create/update UI frames at calculated positions
+5. **Frame Management**: Creates persistent WoW UI frames that move with camera changes
 
-## Crash Prevention
+## Advantages Over ImGui
 
-The system implements multiple layers of crash prevention:
-
-1. **No immediate WorldToScreen calls** - waits for game stability
-2. **Comprehensive pointer validation** - checks all memory before access
-3. **Safe bounds checking** - validates world coordinates
-4. **Graceful error handling** - logs errors instead of crashing
-5. **Thread-safe operations** - uses proper synchronization
+- **Native Integration**: Uses WoW's own UI system instead of external rendering
+- **Performance**: No additional rendering overhead
+- **Compatibility**: Works with WoW's existing UI framework
+- **Persistence**: Frames persist and integrate with game UI
+- **Styling**: Can use WoW's native fonts, textures, and styling
 
 ## Debugging
 
-Check `worldtoscreen_debug.log` for detailed information about:
-- Initialization status
-- WorldFrame pointer validation
-- WorldToScreen function calls
-- Error conditions
-- Arrow additions/removals
+The system includes comprehensive error handling:
+- Memory validation for game pointers
+- Exception handling in Lua execution
+- Safe arrow management with cleanup
 
-## If It Still Crashes
+## Dependencies
 
-1. Check the log file for error messages
-2. Ensure you're injecting into the correct WoW version
-3. Verify the game addresses are correct for your client
-4. Try disabling Safe Mode only after confirming basic functionality works
-5. Add arrows one at a time to isolate issues 
+- **MinHook**: For safe function hooking
+- **nlohmann/json**: For configuration (header-only)
+- **Windows SDK**: For D3D9 and Windows APIs
+
+## License
+
+This project is for educational and testing purposes. Use responsibly and in accordance with game terms of service.
+
+## Notes
+
+- Update memory addresses for your specific WoW version
+- LuaDoString address may vary between game versions
+- Test in a safe environment before production use
+- Arrows will appear as green squares with labels above them 

@@ -4,47 +4,33 @@
 #include <vector>
 #include <string>
 
-namespace WorldToScreen {
-    // Arrow data structure
-    struct Arrow {
-        C3Vector worldPos;
-        C3Vector screenPos;
-        bool isVisible;
-        float size;
-        unsigned int color;
-        std::string label;
-        
-        Arrow(float x, float y, float z, const std::string& lbl = "", float sz = 20.0f, unsigned int col = 0xFF00FF00)
-            : worldPos(x, y, z), isVisible(false), size(sz), color(col), label(lbl) {}
-    };
+struct ArrowData {
+    float worldX, worldY, worldZ;
+    float screenX, screenY;
+    bool isVisible;
+    std::string label;
+    int id;
+};
+
+class WorldToScreenManager {
+private:
+    std::vector<ArrowData> arrows;
+    int nextId;
     
-    // Initialize the arrow rendering system
-    void Initialize();
+    // Lua execution function
+    void ExecuteLuaCode(const std::string& luaCode);
     
-    // Shutdown the arrow rendering system
-    void Shutdown();
+public:
+    WorldToScreenManager();
     
-    // Add an arrow to be rendered
-    void AddArrow(float worldX, float worldY, float worldZ, const std::string& label = "", float size = 20.0f, unsigned int color = 0xFF00FF00);
+    // Arrow management
+    int AddArrow(float worldX, float worldY, float worldZ, const std::string& label = "");
+    void RemoveArrow(int id);
+    void ClearAllArrows();
     
-    // Remove all arrows
-    void ClearArrows();
+    // Update and render
+    void Update();
     
-    // Update arrow positions (call from EndScene)
-    void UpdateArrows();
-    
-    // Render arrows using ImGui draw list
-    void RenderArrows();
-    
-    // Call the actual WoW WorldToScreen function
-    bool CallWorldToScreen(const C3Vector& worldPos, C3Vector& screenPos, int* outcode = nullptr);
-    
-    // Render the simple control GUI
-    void RenderGUI();
-    
-    // Get the WorldFrame pointer
-    CGWorldFrame* GetWorldFrame();
-    
-    // Get the WorldToScreen function pointer
-    WorldToScreenFn GetWorldToScreenFunction();
-} 
+    // Get arrow data for external use
+    const std::vector<ArrowData>& GetArrows() const { return arrows; }
+}; 

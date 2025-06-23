@@ -2,13 +2,17 @@
 
 #include <cstdint>
 #include <cmath>
+#include <Windows.h>
 
-// Basic 3D Vector structure
+// Forward declarations
+struct IDirect3DDevice9;
+
+// Basic vector structure matching WoW's C3Vector
 struct C3Vector {
     float x, y, z;
-
-    C3Vector() : x(0.0f), y(0.0f), z(0.0f) {}
-    C3Vector(float _x, float _y, float _z) : x(_x), y(_y), z(_z) {}
+    
+    C3Vector() : x(0), y(0), z(0) {}
+    C3Vector(float x_, float y_, float z_) : x(x_), y(y_), z(z_) {}
 
     float Distance(const C3Vector& other) const {
         float dx = x - other.x;
@@ -54,10 +58,12 @@ enum OutcodeBits {
 struct CGWorldFrame;
 
 // WorldToScreen function pointer type based on your analysis
-typedef bool(__thiscall* WorldToScreenFn)(CGWorldFrame* pWorldFrame, const C3Vector* pWorldPos, C3Vector* pScreenPos, int* pOutcode);
+typedef bool(__thiscall* WorldToScreenFn)(CGWorldFrame* worldFrame, const C3Vector* worldPos, C3Vector* screenPos, int* outcode);
 
-// Game offsets - Updated with real addresses
-namespace GameOffsets {
-    constexpr uintptr_t WORLD_FRAME_PTR = 0x00B7436C; // Global WorldFrame pointer from your analysis
-    constexpr uintptr_t WORLD_TO_SCREEN_FUNC = 0x004F6D20; // Real WorldToScreen function address
-} 
+// Function pointer type for EndScene
+typedef HRESULT(__stdcall* EndSceneFn)(IDirect3DDevice9* device);
+
+// Game memory addresses - Update these for your WoW version
+constexpr uintptr_t WORLDFRAME_PTR = 0x00B7436C;     // Pointer to WorldFrame
+constexpr uintptr_t WORLDTOSCREEN_ADDR = 0x004F6D20;  // WorldToScreen function
+constexpr uintptr_t LUADOSTRING_ADDR = 0x00819210;    // LuaDoString function (3.3.5a) 
