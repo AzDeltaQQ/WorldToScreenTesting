@@ -68,9 +68,8 @@ set(CORE_GUI_SOURCES
 set(SOURCES
     dllmain.cpp
     core/hook.cpp
-    core/drawing.cpp
-    core/player.cpp
-    core/Logger.cpp
+    core/drawing/drawing.cpp
+    core/logs/Logger.cpp
     ${MINHOOK_SOURCES}
     ${IMGUI_SOURCES}
     ${CORE_MEMORY_SOURCES}
@@ -82,8 +81,8 @@ set(SOURCES
 set(HEADERS
     core/hook.h
     core/types.h
-    core/drawing.h
-    core/Logger.h
+    core/drawing/drawing.h
+    core/logs/Logger.h
     core/memory/memory.h
     core/types/types.h
     core/objects/WowObject.h
@@ -103,6 +102,8 @@ add_library(${PROJECT_NAME} SHARED ${SOURCES} ${HEADERS})
 target_include_directories(${PROJECT_NAME} 
     PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/drawing
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/logs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/memory
     ${CMAKE_CURRENT_SOURCE_DIR}/core/types
     ${CMAKE_CURRENT_SOURCE_DIR}/core/objects

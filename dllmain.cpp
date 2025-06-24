@@ -1,7 +1,8 @@
 #include <Windows.h>
+#include <thread>
+#include "core/logs/Logger.h"
 #include "core/hook.h"
-#include "core/drawing.h"
-#include "core/Logger.h"
+#include "core/drawing/drawing.h"
 
 // Global instance
 extern WorldToScreenManager g_WorldToScreenManager;

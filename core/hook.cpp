@@ -1,9 +1,9 @@
 #include "hook.h"
-#include "drawing.h"
+#include "drawing/drawing.h"
 #include "objects/ObjectManager.h"
 #include "gui/GUI.h"
 #include "types/types.h"
-#include "Logger.h"
+#include "logs/Logger.h"
 #include <Windows.h>
 #include <d3d9.h>
 #include <iostream>

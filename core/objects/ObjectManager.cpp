@@ -5,7 +5,7 @@
 #include "WowGameObject.h"
 #include "../memory/memory.h"
 #include "../types/types.h"
-#include "../Logger.h"
+#include "../logs/Logger.h"
 #include <cmath>
 #include <memory>
 #include <algorithm>

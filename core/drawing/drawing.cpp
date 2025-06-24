@@ -1,12 +1,13 @@
 #include "drawing.h"
-#include "types.h"
-#include "memory/memory.h"
-#include "Logger.h"
+#include "../objects/ObjectManager.h"
+#include "../objects/WowObject.h"
+#include "../logs/Logger.h"
+#include "../memory/memory.h"
+#include "../types/types.h"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
 #include <Windows.h>
-#include "objects/ObjectManager.h"
 
 // Global instance
 WorldToScreenManager g_WorldToScreenManager;
