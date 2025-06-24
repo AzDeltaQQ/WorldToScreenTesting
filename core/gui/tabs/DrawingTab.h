@@ -23,6 +23,11 @@ namespace GUI {
         bool m_showUnitNames;
         bool m_showGameObjectNames;
         
+        // Distance filters (separate from name filters)
+        bool m_showPlayerDistances;
+        bool m_showUnitDistances;
+        bool m_showGameObjectDistances;
+        
         // Filter settings
         float m_maxDrawDistance;
         bool m_onlyShowTargeted;
@@ -35,6 +40,7 @@ namespace GUI {
         float m_playerArrowColor[4];
         float m_textColor[4];
         float m_distanceColor[4];
+        float m_lineColor[4];
         
         // Cached statistics (updated periodically, not every frame)
         int m_cachedObjectsInRange = 0;
@@ -73,6 +79,7 @@ namespace GUI {
         const float* GetPlayerArrowColor() const { return m_playerArrowColor; }
         const float* GetTextColor() const { return m_textColor; }
         const float* GetDistanceColor() const { return m_distanceColor; }
+        const float* GetLineColor() const { return m_lineColor; }
     };
 
 } 

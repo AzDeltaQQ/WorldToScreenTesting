@@ -39,6 +39,7 @@ public:
     
     // Marker updating
     bool UpdateMarkerPosition(const std::string& label, const D3DXVECTOR3& newPos);
+    bool UpdateMarkerProperties(const std::string& label, D3DCOLOR color, float size);
     
     // Update and render
     void Update();
@@ -48,4 +49,8 @@ public:
     const std::vector<MarkerData>& GetMarkers() const { return m_markers; }
     size_t GetMarkerCount() const { return m_markers.size(); }
     int GetVisibleCount() const;
+    
+    // Text styling settings (synchronized from GUI)
+    D3DCOLOR textColor = 0xFFFFFFFF; // Default white
+    float textScale = 1.0f; // Default scale
 }; 

@@ -2,7 +2,7 @@
 #include "../../logs/Logger.h"
 #include <algorithm>
 
-RenderEngine::RenderEngine() : m_pDevice(nullptr), m_pLine(nullptr), m_pFont(nullptr) {
+RenderEngine::RenderEngine() : m_pDevice(nullptr), m_pLine(nullptr), m_pFont(nullptr), m_currentTextScale(1.0f) {
 }
 
 RenderEngine::~RenderEngine() {
@@ -158,7 +158,7 @@ void RenderEngine::DrawTriangleArrow(const D3DXVECTOR2& pos, D3DCOLOR color, flo
     m_pLine->End();
 }
 
-void RenderEngine::DrawText(const std::string& text, const D3DXVECTOR2& pos, D3DCOLOR color) {
+void RenderEngine::DrawText(const std::string& text, const D3DXVECTOR2& pos, D3DCOLOR color, float scale) {
     if (!m_pFont || !m_pDevice || text.empty()) {
         return;
     }
@@ -168,15 +168,61 @@ void RenderEngine::DrawText(const std::string& text, const D3DXVECTOR2& pos, D3D
     if (cooperativeLevel != D3D_OK) {
         return;
     }
-        
+    
+    // Update font scale if needed
+    if (scale != m_currentTextScale) {
+        SetTextScale(scale);
+    }
+    
+    // Calculate scaled text area
+    float baseWidth = 100.0f;   // Base text area width
+    float baseHeight = 40.0f;   // Base text area height
+    float scaledWidth = baseWidth * scale;
+    float scaledHeight = baseHeight * scale;
+    
     RECT rect;
-    rect.left = static_cast<LONG>(pos.x - 50);
-    rect.top = static_cast<LONG>(pos.y - 20);
-    rect.right = static_cast<LONG>(pos.x + 50);
-    rect.bottom = static_cast<LONG>(pos.y + 20);
+    rect.left = static_cast<LONG>(pos.x - scaledWidth * 0.5f);
+    rect.top = static_cast<LONG>(pos.y - scaledHeight * 0.5f);
+    rect.right = static_cast<LONG>(pos.x + scaledWidth * 0.5f);
+    rect.bottom = static_cast<LONG>(pos.y + scaledHeight * 0.5f);
     
     // Convert string to wide string
     std::wstring wtext(text.begin(), text.end());
     
     m_pFont->DrawText(nullptr, wtext.c_str(), -1, &rect, DT_CENTER | DT_VCENTER, color);
+}
+
+void RenderEngine::SetTextScale(float scale) {
+    if (scale != m_currentTextScale) {
+        m_currentTextScale = scale;
+        CreateScaledFont(scale);
+    }
+}
+
+bool RenderEngine::CreateScaledFont(float scale) {
+    if (!m_pDevice) return false;
+    
+    // Release existing font
+    if (m_pFont) {
+        m_pFont->Release();
+        m_pFont = nullptr;
+    }
+    
+    // Calculate scaled font size
+    int baseFontSize = 14;
+    int scaledFontSize = static_cast<int>(baseFontSize * scale);
+    if (scaledFontSize < 8) scaledFontSize = 8;   // Minimum readable size
+    if (scaledFontSize > 72) scaledFontSize = 72; // Maximum reasonable size
+    
+    // Create new scaled font
+    HRESULT hr = D3DXCreateFont(m_pDevice, scaledFontSize, 0, FW_NORMAL, 1, FALSE, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                                L"Arial", &m_pFont);
+    
+    if (FAILED(hr)) {
+        LOG_ERROR("Failed to create scaled ID3DXFont, HRESULT: 0x" + std::to_string(hr));
+        return false;
+    }
+    
+    return true;
 } 

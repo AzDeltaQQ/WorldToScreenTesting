@@ -191,7 +191,10 @@ HRESULT __stdcall HookedEndScene(IDirect3DDevice9* device) {
                     // Connect ObjectManager to GUI regardless of initialization status
                     GUI::GUIManager::GetInstance()->SetObjectManager(g_ObjectManager);
                     
-                    LOG_INFO("ObjectManager connected to GUI");
+                    // Connect ObjectManager to WorldToScreen system for object name rendering
+                    g_WorldToScreenManager.SetObjectManager(g_ObjectManager);
+                    
+                    LOG_INFO("ObjectManager connected to GUI and WorldToScreen systems");
                 } else {
                     LOG_ERROR("Failed to get ObjectManager instance");
                 }

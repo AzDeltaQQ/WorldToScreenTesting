@@ -6,8 +6,11 @@
 #include "components/LineManager.h"
 #include "components/MarkerManager.h"
 #include "components/PlayerTracker.h"
+#include "components/ObjectOverlay.h"
 #include <d3d9.h>
 #include <d3dx9.h>
+
+class ObjectManager; // Forward declaration
 
 class WorldToScreenManager {
 private:
@@ -17,6 +20,7 @@ private:
     LineManager m_lineManager;
     MarkerManager m_markerManager;
     PlayerTracker m_playerTracker;
+    ObjectOverlay m_objectOverlay;
     
     // Device reference
     LPDIRECT3DDEVICE9 m_pDevice;
@@ -30,6 +34,9 @@ public:
     void Cleanup();
     void OnDeviceLost();
     void OnDeviceReset();
+    
+    // Object manager setup (for object name rendering)
+    void SetObjectManager(ObjectManager* pObjectManager);
     
     // Line management (delegates to LineManager)
     int AddLine(const D3DXVECTOR3& start, const D3DXVECTOR3& end, D3DCOLOR color = 0xFF00FF00, float thickness = 2.0f, const std::string& label = "");
@@ -63,4 +70,27 @@ public:
     bool showObjectNames = false;
     bool showDistances = false;
     float maxDrawDistance = 50.0f;
+    
+    // Arrow color and size settings (for GUI synchronization)
+    D3DCOLOR playerArrowColor = 0xFFFF0000; // Default red
+    float playerArrowSize = 20.0f; // Default size
+    
+    // Line color settings
+    D3DCOLOR lineColor = 0xFF00FF00; // Default green
+    float lineThickness = 2.0f; // Default thickness
+    
+    // Text and distance color settings
+    D3DCOLOR textColor = 0xFFFFFFFF; // Default white
+    D3DCOLOR distanceColor = 0xFFCCCCCC; // Default light gray
+    float textScale = 1.0f; // Default scale
+    
+    // Object name filters
+    bool showPlayerNames = true;
+    bool showUnitNames = false;
+    bool showGameObjectNames = false;
+    
+    // Distance filters (separate from name filters)
+    bool showPlayerDistances = true;
+    bool showUnitDistances = false;
+    bool showGameObjectDistances = false;
 }; 

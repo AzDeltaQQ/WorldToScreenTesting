@@ -55,6 +55,17 @@ bool MarkerManager::UpdateMarkerPosition(const std::string& label, const D3DXVEC
     return false;
 }
 
+bool MarkerManager::UpdateMarkerProperties(const std::string& label, D3DCOLOR color, float size) {
+    for (auto& marker : m_markers) {
+        if (marker.label == label) {
+            marker.color = color;
+            marker.size = size;
+            return true;
+        }
+    }
+    return false;
+}
+
 void MarkerManager::Update() {
     if (!m_pWorldToScreen) return;
     
@@ -94,7 +105,7 @@ void MarkerManager::Render() {
             if (!marker.label.empty()) {
                 D3DXVECTOR2 textPos = marker.screenPos;
                 textPos.y -= marker.size + 5; // Position text above marker
-                m_pRenderEngine->DrawText(marker.label, textPos, 0xFFFFFFFF);
+                m_pRenderEngine->DrawText(marker.label, textPos, textColor, textScale);
             }
         }
     }

@@ -42,9 +42,31 @@ bool WorldToScreenManager::Initialize(LPDIRECT3DDEVICE9 pDevice) {
     m_lineManager.Initialize(&m_worldToScreenCore, &m_renderEngine);
     m_markerManager.Initialize(&m_worldToScreenCore, &m_renderEngine);
     m_playerTracker.Initialize(&m_worldToScreenCore, &m_lineManager, &m_markerManager);
+    m_objectOverlay.Initialize(&m_worldToScreenCore, &m_renderEngine, nullptr); // ObjectManager set later
     
     // Sync settings
     m_playerTracker.showPlayerArrow = showPlayerArrow;
+    m_playerTracker.playerArrowColor = playerArrowColor;
+    m_playerTracker.playerArrowSize = playerArrowSize;
+    m_playerTracker.lineColor = lineColor;
+    
+    // Sync MarkerManager text settings
+    m_markerManager.textColor = textColor;
+    m_markerManager.textScale = textScale;
+    
+    // Sync ObjectOverlay settings
+    m_objectOverlay.showObjectNames = showObjectNames;
+    m_objectOverlay.showDistances = showDistances;
+    m_objectOverlay.showPlayerNames = showPlayerNames;
+    m_objectOverlay.showUnitNames = showUnitNames;
+    m_objectOverlay.showGameObjectNames = showGameObjectNames;
+    m_objectOverlay.showPlayerDistances = showPlayerDistances;
+    m_objectOverlay.showUnitDistances = showUnitDistances;
+    m_objectOverlay.showGameObjectDistances = showGameObjectDistances;
+    m_objectOverlay.maxDrawDistance = maxDrawDistance;
+    m_objectOverlay.textColor = textColor;
+    m_objectOverlay.distanceColor = distanceColor;
+    m_objectOverlay.textScale = textScale;
     
     LOG_INFO("WorldToScreenManager initialized successfully with modular components");
     
@@ -62,6 +84,7 @@ void WorldToScreenManager::Cleanup() {
     m_lineManager.Cleanup();
     m_renderEngine.Cleanup();
     m_worldToScreenCore.Cleanup();
+    m_objectOverlay.Cleanup();
     
     m_pDevice = nullptr;
 }
@@ -74,6 +97,10 @@ void WorldToScreenManager::OnDeviceLost() {
 void WorldToScreenManager::OnDeviceReset() {
     m_renderEngine.OnDeviceReset();
     m_worldToScreenCore.OnDeviceReset();
+}
+
+void WorldToScreenManager::SetObjectManager(ObjectManager* pObjectManager) {
+    m_objectOverlay.Initialize(&m_worldToScreenCore, &m_renderEngine, pObjectManager);
 }
 
 // Line management (delegates to LineManager)
@@ -150,20 +177,51 @@ void WorldToScreenManager::Update() {
     
     // Sync settings
     m_playerTracker.showPlayerArrow = showPlayerArrow;
+    m_playerTracker.playerArrowColor = playerArrowColor;
+    m_playerTracker.playerArrowSize = playerArrowSize;
+    m_playerTracker.lineColor = lineColor;
+    
+    // Sync MarkerManager text settings
+    m_markerManager.textColor = textColor;
+    m_markerManager.textScale = textScale;
+    
+    // Sync ObjectOverlay settings
+    m_objectOverlay.showObjectNames = showObjectNames;
+    m_objectOverlay.showDistances = showDistances;
+    m_objectOverlay.showPlayerNames = showPlayerNames;
+    m_objectOverlay.showUnitNames = showUnitNames;
+    m_objectOverlay.showGameObjectNames = showGameObjectNames;
+    m_objectOverlay.showPlayerDistances = showPlayerDistances;
+    m_objectOverlay.showUnitDistances = showUnitDistances;
+    m_objectOverlay.showGameObjectDistances = showGameObjectDistances;
+    m_objectOverlay.maxDrawDistance = maxDrawDistance;
+    m_objectOverlay.textColor = textColor;
+    m_objectOverlay.distanceColor = distanceColor;
+    m_objectOverlay.textScale = textScale;
     
     // Update all components with exception handling
     try {
         m_lineManager.Update();
-        m_markerManager.Update();
-        m_playerTracker.Update();
+    } catch (...) {
+        LOG_WARNING("LineManager update failed");
     }
-    catch (...) {
-        // Log error but don't crash
-        static int errorCount = 0;
-        if (++errorCount % 60 == 0) { // Log every second at 60 FPS
-            LOG_ERROR("Exception in WorldToScreenManager::Update()");
-        }
-        return;
+    
+    try {
+        m_markerManager.Update();
+    } catch (...) {
+        LOG_WARNING("MarkerManager update failed");
+    }
+    
+    try {
+        m_playerTracker.Update();
+    } catch (...) {
+        LOG_WARNING("PlayerTracker update failed");
+    }
+    
+    try {
+        m_objectOverlay.Update();
+    } catch (...) {
+        LOG_WARNING("ObjectOverlay update failed");
     }
     
     // Debug output every 600 updates (about once per 10 seconds at 60 FPS)
@@ -177,43 +235,19 @@ void WorldToScreenManager::Update() {
 }
 
 void WorldToScreenManager::Render() {
-    if (!m_pDevice || !m_renderEngine.IsInitialized()) {
-        return;
-    }
-    
-    // Check device state before rendering
-    HRESULT cooperativeLevel = m_pDevice->TestCooperativeLevel();
-    if (cooperativeLevel != D3D_OK) {
-        return;
-    }
+    if (!m_pDevice) return;
     
     try {
-        // Save render states
-        DWORD oldAlphaBlend, oldSrcBlend, oldDestBlend;
-        m_pDevice->GetRenderState(D3DRS_ALPHABLENDENABLE, &oldAlphaBlend);
-        m_pDevice->GetRenderState(D3DRS_SRCBLEND, &oldSrcBlend);
-        m_pDevice->GetRenderState(D3DRS_DESTBLEND, &oldDestBlend);
-        
-        // Begin rendering
-        m_renderEngine.BeginRender();
-        
-        // Render all components
+        // Render all components in order
         m_lineManager.Render();
         m_markerManager.Render();
-        
-        // End rendering and restore render states
-        m_renderEngine.EndRender();
-        m_pDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, oldAlphaBlend);
-        m_pDevice->SetRenderState(D3DRS_SRCBLEND, oldSrcBlend);
-        m_pDevice->SetRenderState(D3DRS_DESTBLEND, oldDestBlend);
-    }
-    catch (...) {
+        m_objectOverlay.Render(); // Render object names and distances
+    } catch (...) {
         // Log error but don't crash
-        static int renderErrorCount = 0;
-        if (++renderErrorCount % 60 == 0) { // Log every second at 60 FPS
+        static int errorCount = 0;
+        if (++errorCount % 60 == 0) { // Log every second at 60 FPS
             LOG_ERROR("Exception in WorldToScreenManager::Render()");
         }
-        return;
     }
 }
 

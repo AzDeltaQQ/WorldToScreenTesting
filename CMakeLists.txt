@@ -60,6 +60,7 @@ set(SOURCES
     core/drawing/components/LineManager.cpp
     core/drawing/components/MarkerManager.cpp
     core/drawing/components/PlayerTracker.cpp
+    core/drawing/components/ObjectOverlay.cpp
     core/logs/Logger.cpp
     core/types/types.cpp
     ${MINHOOK_SOURCES}

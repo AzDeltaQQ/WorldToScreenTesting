@@ -71,9 +71,12 @@ void PlayerTracker::UpdatePlayerArrow() {
     // Try to update existing player arrow position
     if (!m_pMarkerManager->UpdateMarkerPosition("YOU", playerD3DPos)) {
         // Player arrow doesn't exist, create it
-        m_pMarkerManager->AddMarker(playerD3DPos, 0xFFFF0000, 20.0f, "YOU");
+        m_pMarkerManager->AddMarker(playerD3DPos, playerArrowColor, playerArrowSize, "YOU");
         LOG_DEBUG("Created player arrow at position (" + std::to_string(playerPos.x) + ", " + 
                  std::to_string(playerPos.y) + ", " + std::to_string(playerPos.z) + ")");
+    } else {
+        // Player arrow exists, update its properties (color and size) as well
+        m_pMarkerManager->UpdateMarkerProperties("YOU", playerArrowColor, playerArrowSize);
     }
     
     // Debug log position updates occasionally
@@ -151,7 +154,7 @@ void PlayerTracker::UpdatePlayerToTargetLine() {
                 
                 // Remove old line each frame to keep simple
                 if (m_targetLineId != -1) m_pLineManager->RemoveLine(m_targetLineId);
-                m_targetLineId = m_pLineManager->AddLine(pPos, tPos, 0xFFFF0000, 2.0f, "PlayerToTarget");
+                m_targetLineId = m_pLineManager->AddLine(pPos, tPos, lineColor, 2.0f, "PlayerToTarget");
             } else {
                 // Failed to get player position, clear line
                 if (m_targetLineId != -1) { 
@@ -189,7 +192,7 @@ int PlayerTracker::AddPlayerToEnemyLine(const D3DXVECTOR3& enemyPos, D3DCOLOR co
     }
     
     D3DXVECTOR3 playerD3DPos(playerPos.x, playerPos.y, playerPos.z);
-    return m_pLineManager->AddLine(playerD3DPos, enemyPos, color, 2.0f, "PlayerToEnemy");
+    return m_pLineManager->AddLine(playerD3DPos, enemyPos, lineColor, 2.0f, "PlayerToEnemy");
 }
 
 void PlayerTracker::Update() {

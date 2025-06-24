@@ -38,4 +38,7 @@ public:
     
     // Settings
     bool showPlayerArrow = true;
+    D3DCOLOR playerArrowColor = 0xFFFF0000; // Default red
+    float playerArrowSize = 20.0f; // Default size
+    D3DCOLOR lineColor = 0xFF00FF00; // Default green for lines
 }; 

@@ -21,6 +21,9 @@ DrawingTab::DrawingTab()
     , m_showPlayerNames(true)
     , m_showUnitNames(false)
     , m_showGameObjectNames(false)
+    , m_showPlayerDistances(true)
+    , m_showUnitDistances(false)
+    , m_showGameObjectDistances(false)
     , m_maxDrawDistance(50.0f)
     , m_onlyShowTargeted(false)
     , m_textScale(1.0f)
@@ -41,6 +44,11 @@ DrawingTab::DrawingTab()
     m_distanceColor[1] = 0.8f;
     m_distanceColor[2] = 0.8f;
     m_distanceColor[3] = 1.0f;
+    
+    m_lineColor[0] = 0.0f; // Green
+    m_lineColor[1] = 1.0f;
+    m_lineColor[2] = 0.0f;
+    m_lineColor[3] = 1.0f;
 }
 
 void DrawingTab::SetObjectManager(ObjectManager* objManager) {
@@ -63,6 +71,44 @@ void DrawingTab::Update(float deltaTime) {
     g_WorldToScreenManager.showObjectNames = m_showObjectNames;
     g_WorldToScreenManager.showDistances = m_showDistances;
     g_WorldToScreenManager.maxDrawDistance = m_maxDrawDistance;
+    
+    // Convert float RGBA to D3DCOLOR and sync arrow settings
+    BYTE r = (BYTE)(m_playerArrowColor[0] * 255.0f);
+    BYTE g = (BYTE)(m_playerArrowColor[1] * 255.0f);
+    BYTE b = (BYTE)(m_playerArrowColor[2] * 255.0f);
+    BYTE a = (BYTE)(m_playerArrowColor[3] * 255.0f);
+    g_WorldToScreenManager.playerArrowColor = D3DCOLOR_ARGB(a, r, g, b);
+    g_WorldToScreenManager.playerArrowSize = (float)m_arrowSize;
+    
+    // Convert and sync text color settings
+    r = (BYTE)(m_textColor[0] * 255.0f);
+    g = (BYTE)(m_textColor[1] * 255.0f);
+    b = (BYTE)(m_textColor[2] * 255.0f);
+    a = (BYTE)(m_textColor[3] * 255.0f);
+    g_WorldToScreenManager.textColor = D3DCOLOR_ARGB(a, r, g, b);
+    
+    // Convert and sync distance color settings
+    r = (BYTE)(m_distanceColor[0] * 255.0f);
+    g = (BYTE)(m_distanceColor[1] * 255.0f);
+    b = (BYTE)(m_distanceColor[2] * 255.0f);
+    a = (BYTE)(m_distanceColor[3] * 255.0f);
+    g_WorldToScreenManager.distanceColor = D3DCOLOR_ARGB(a, r, g, b);
+    
+    // Convert and sync line color settings
+    r = (BYTE)(m_lineColor[0] * 255.0f);
+    g = (BYTE)(m_lineColor[1] * 255.0f);
+    b = (BYTE)(m_lineColor[2] * 255.0f);
+    a = (BYTE)(m_lineColor[3] * 255.0f);
+    g_WorldToScreenManager.lineColor = D3DCOLOR_ARGB(a, r, g, b);
+    
+    // Sync other settings
+    g_WorldToScreenManager.textScale = m_textScale;
+    g_WorldToScreenManager.showPlayerNames = m_showPlayerNames;
+    g_WorldToScreenManager.showUnitNames = m_showUnitNames;
+    g_WorldToScreenManager.showGameObjectNames = m_showGameObjectNames;
+    g_WorldToScreenManager.showPlayerDistances = m_showPlayerDistances;
+    g_WorldToScreenManager.showUnitDistances = m_showUnitDistances;
+    g_WorldToScreenManager.showGameObjectDistances = m_showGameObjectDistances;
 }
 
 void DrawingTab::Render() {
@@ -88,6 +134,17 @@ void DrawingTab::Render() {
     
     ImGui::Separator();
     
+    // Lines Section (NEW)
+    if (ImGui::CollapsingHeader("Lines & Connections")) {
+        ImGui::Text("Line rendering settings for player-to-target connections");
+        
+        ImGui::ColorEdit4("Line Color", m_lineColor);
+        
+        ImGui::Text("Lines automatically connect player to current target");
+    }
+    
+    ImGui::Separator();
+    
     // Object Names Section
     if (ImGui::CollapsingHeader("Object Names")) {
         ImGui::Checkbox("Show Object Names", &m_showObjectNames);
@@ -108,9 +165,18 @@ void DrawingTab::Render() {
         ImGui::Checkbox("Show Distances", &m_showDistances);
         
         if (m_showDistances) {
-            ImGui::SliderFloat("Max Draw Distance", &m_maxDrawDistance, 10.0f, 200.0f, "%.1f yards");
-            ImGui::Checkbox("Only Show Targeted Objects", &m_onlyShowTargeted);
+            ImGui::Indent();
+            
+            ImGui::Text("Show distances for:");
+            ImGui::Checkbox("Player Distances", &m_showPlayerDistances);
+            ImGui::Checkbox("Unit Distances", &m_showUnitDistances);
+            ImGui::Checkbox("GameObject Distances", &m_showGameObjectDistances);
+            
+            ImGui::Unindent();
         }
+        
+        ImGui::SliderFloat("Max Draw Distance", &m_maxDrawDistance, 10.0f, 200.0f, "%.1f yards");
+        ImGui::Checkbox("Only Show Targeted Objects", &m_onlyShowTargeted);
     }
     
     ImGui::Separator();
@@ -236,6 +302,9 @@ void DrawingTab::Render() {
             m_showPlayerNames = true;
             m_showUnitNames = false;
             m_showGameObjectNames = false;
+            m_showPlayerDistances = true;
+            m_showUnitDistances = false;
+            m_showGameObjectDistances = false;
             m_maxDrawDistance = 50.0f;
             m_onlyShowTargeted = false;
             m_textScale = 1.0f;
@@ -250,6 +319,9 @@ void DrawingTab::Render() {
             
             m_distanceColor[0] = 0.8f; m_distanceColor[1] = 0.8f; 
             m_distanceColor[2] = 0.8f; m_distanceColor[3] = 1.0f;
+            
+            m_lineColor[0] = 0.0f; m_lineColor[1] = 1.0f; 
+            m_lineColor[2] = 0.0f; m_lineColor[3] = 1.0f;
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Resets GUI settings only (colors, sizes, checkboxes).\nDoes NOT clear rendered markers/lines.");
@@ -308,6 +380,9 @@ void DrawingTab::Render() {
             m_showPlayerNames = true;
             m_showUnitNames = false;
             m_showGameObjectNames = false;
+            m_showPlayerDistances = true;
+            m_showUnitDistances = false;
+            m_showGameObjectDistances = false;
             m_maxDrawDistance = 50.0f;
             m_onlyShowTargeted = false;
             m_textScale = 1.0f;
@@ -322,6 +397,9 @@ void DrawingTab::Render() {
             
             m_distanceColor[0] = 0.8f; m_distanceColor[1] = 0.8f; 
             m_distanceColor[2] = 0.8f; m_distanceColor[3] = 1.0f;
+            
+            m_lineColor[0] = 0.0f; m_lineColor[1] = 1.0f; 
+            m_lineColor[2] = 0.0f; m_lineColor[3] = 1.0f;
             
             // Clear all rendered objects
             extern WorldToScreenManager g_WorldToScreenManager;
