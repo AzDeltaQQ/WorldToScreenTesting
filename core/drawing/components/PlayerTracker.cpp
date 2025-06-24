@@ -90,6 +90,16 @@ void PlayerTracker::UpdatePlayerArrow() {
 void PlayerTracker::UpdatePlayerToTargetLine() {
     if (!m_pLineManager || !m_pWorldToScreen) return;
     
+    // Check if player-to-target lines are enabled
+    if (!showPlayerToTargetLine) {
+        // Clear line if disabled
+        if (m_targetLineId != -1) { 
+            m_pLineManager->RemoveLine(m_targetLineId); 
+            m_targetLineId = -1; 
+        }
+        return;
+    }
+    
     auto objMgr = ObjectManager::GetInstance();
     if (!objMgr || !objMgr->IsInitialized()) {
         // Clear line if object manager not available
@@ -145,9 +155,9 @@ void PlayerTracker::UpdatePlayerToTargetLine() {
                 
                 // Debug log position updates occasionally
                 static int posUpdateCounter = 0;
-                if (++posUpdateCounter % 300 == 0) {
+                if (++posUpdateCounter % 60 == 0) {  // Match LoS logging frequency
                     float distance = sqrt(pow(pPos.x - tPos.x, 2) + pow(pPos.y - tPos.y, 2) + pow(pPos.z - tPos.z, 2));
-                    LOG_DEBUG("PlayerToTarget positions: Player(" + std::to_string(pPos.x) + "," + std::to_string(pPos.y) + "," + std::to_string(pPos.z) + 
+                    LOG_DEBUG("PlayerTracker Line: Player(" + std::to_string(pPos.x) + "," + std::to_string(pPos.y) + "," + std::to_string(pPos.z) + 
                              ") Target(" + std::to_string(tPos.x) + "," + std::to_string(tPos.y) + "," + std::to_string(tPos.z) + 
                              ") Distance=" + std::to_string(distance) + " yards");
                 }

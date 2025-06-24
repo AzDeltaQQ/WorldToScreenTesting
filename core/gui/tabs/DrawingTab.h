@@ -5,6 +5,7 @@
 #include <vector>
 #include "../../types.h"
 #include "../../types/types.h"
+#include "../../drawing/components/LineOfSightManager.h"
 
 // Forward declarations
 class ObjectManager;
@@ -31,6 +32,7 @@ namespace GUI {
         // Filter settings
         float m_maxDrawDistance;
         bool m_onlyShowTargeted;
+        bool m_showPlayerToTargetLine;
         
         // Style settings
         float m_textScale;
@@ -51,6 +53,10 @@ namespace GUI {
         // Live data for HUD
         C3Vector m_livePlayerPos;
         WGUID m_liveTargetGUID;
+        
+        // Line of Sight Manager
+        LineOfSightManager m_losManager;
+        int m_losLineId = -1;  // Track LoS line for cleanup
         
         void UpdateStatistics();
 

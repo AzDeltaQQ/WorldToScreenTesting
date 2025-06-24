@@ -7,6 +7,7 @@
 #include "components/MarkerManager.h"
 #include "components/PlayerTracker.h"
 #include "components/ObjectOverlay.h"
+#include "components/LineOfSightManager.h"
 #include <d3d9.h>
 #include <d3dx9.h>
 
@@ -21,6 +22,7 @@ private:
     MarkerManager m_markerManager;
     PlayerTracker m_playerTracker;
     ObjectOverlay m_objectOverlay;
+    LineOfSightManager m_losManager;
     
     // Device reference
     LPDIRECT3DDEVICE9 m_pDevice;
@@ -61,6 +63,9 @@ public:
     // Public WorldToScreen function for GUI use (delegates to WorldToScreenCore)
     bool WorldToScreen(float worldX, float worldY, float worldZ, float* screenX, float* screenY);
     
+    // Player position access (delegates to WorldToScreenCore)
+    bool GetPlayerPositionSafe(C3Vector& playerPos);
+    
     // Get data for external use
     const std::vector<LineData>& GetLines() const;
     const std::vector<MarkerData>& GetMarkers() const;
@@ -93,4 +98,11 @@ public:
     bool showPlayerDistances = true;
     bool showUnitDistances = false;
     bool showGameObjectDistances = false;
+    
+    // Line settings
+    bool showPlayerToTargetLine = true;
+    
+    // Line of Sight management
+    LineOfSightManager& GetLoSManager() { return m_losManager; }
+    const LineOfSightManager& GetLoSManager() const { return m_losManager; }
 }; 

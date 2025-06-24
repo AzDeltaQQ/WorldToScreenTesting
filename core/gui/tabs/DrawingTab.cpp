@@ -5,10 +5,12 @@
 #include "../../objects/WowGameObject.h"
 #include "../../objects/WowPlayer.h"
 #include "../../drawing/drawing.h"
+#include "../../logs/Logger.h"
 #include <imgui.h>
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#include <cstring>
 #include "../../types.h"
 
 namespace GUI {
@@ -26,6 +28,7 @@ DrawingTab::DrawingTab()
     , m_showGameObjectDistances(false)
     , m_maxDrawDistance(50.0f)
     , m_onlyShowTargeted(false)
+    , m_showPlayerToTargetLine(true)
     , m_textScale(1.0f)
     , m_arrowSize(20)
 {
@@ -53,6 +56,15 @@ DrawingTab::DrawingTab()
 
 void DrawingTab::SetObjectManager(ObjectManager* objManager) {
     m_objectManager = objManager;
+    
+    // Initialize the Line of Sight manager
+    if (objManager && !m_losManager.IsInitialized()) {
+        if (m_losManager.Initialize()) {
+            LOG_INFO("LineOfSightManager initialized in DrawingTab");
+        } else {
+            LOG_WARNING("Failed to initialize LineOfSightManager in DrawingTab");
+        }
+    }
 }
 
 void DrawingTab::Update(float deltaTime) {
@@ -109,6 +121,26 @@ void DrawingTab::Update(float deltaTime) {
     g_WorldToScreenManager.showPlayerDistances = m_showPlayerDistances;
     g_WorldToScreenManager.showUnitDistances = m_showUnitDistances;
     g_WorldToScreenManager.showGameObjectDistances = m_showGameObjectDistances;
+    g_WorldToScreenManager.showPlayerToTargetLine = m_showPlayerToTargetLine;
+    
+    // Update Line of Sight manager
+    if (m_losManager.IsInitialized()) {
+        Vector3 playerPos(m_livePlayerPos.x, m_livePlayerPos.y, m_livePlayerPos.z);
+        m_losManager.Update(deltaTime, playerPos);
+        
+        // Update LoS for objects if enabled
+        if (m_losManager.GetSettings().enableLoSChecks && m_objectManager) {
+            auto allObjects = m_objectManager->GetAllObjects();
+            std::vector<WowObject*> objectPtrs;
+            objectPtrs.reserve(allObjects.size());
+            
+            for (auto& objPair : allObjects) {
+                objectPtrs.push_back(objPair.second.get());
+            }
+            
+            m_losManager.UpdateLoSForObjects(objectPtrs, playerPos);
+        }
+    }
 }
 
 void DrawingTab::Render() {
@@ -138,9 +170,14 @@ void DrawingTab::Render() {
     if (ImGui::CollapsingHeader("Lines & Connections")) {
         ImGui::Text("Line rendering settings for player-to-target connections");
         
+        ImGui::Checkbox("Show Player-to-Target Line", &m_showPlayerToTargetLine);
         ImGui::ColorEdit4("Line Color", m_lineColor);
         
-        ImGui::Text("Lines automatically connect player to current target");
+        if (m_showPlayerToTargetLine) {
+            ImGui::Text("Lines automatically connect player to current target");
+        } else {
+            ImGui::Text("Player-to-target lines are disabled");
+        }
     }
     
     ImGui::Separator();
@@ -177,6 +214,145 @@ void DrawingTab::Render() {
         
         ImGui::SliderFloat("Max Draw Distance", &m_maxDrawDistance, 10.0f, 200.0f, "%.1f yards");
         ImGui::Checkbox("Only Show Targeted Objects", &m_onlyShowTargeted);
+    }
+    
+    ImGui::Separator();
+    
+    // Line of Sight Section
+    if (ImGui::CollapsingHeader("Line of Sight")) {
+        const auto& losSettings = m_losManager.GetSettings();
+        LoSSettings newSettings = losSettings;
+        
+        ImGui::Checkbox("Enable Line of Sight Checks", &newSettings.enableLoSChecks);
+        
+        if (newSettings.enableLoSChecks) {
+            ImGui::Indent();
+            
+            ImGui::Checkbox("Show LoS Lines", &newSettings.showLoSLines);
+            ImGui::Checkbox("Use LoS for Targeting", &newSettings.useLoSForTargeting);
+            ImGui::Checkbox("Show Blocked Targets", &newSettings.showBlockedTargets);
+            
+            ImGui::Separator();
+            ImGui::Text("Visual Settings:");
+            ImGui::ColorEdit4("Clear LoS Color", newSettings.clearLoSColor);
+            ImGui::ColorEdit4("Blocked LoS Color", newSettings.blockedLoSColor);
+            ImGui::SliderFloat("LoS Line Width", &newSettings.losLineWidth, 1.0f, 5.0f, "%.1f");
+            
+            ImGui::Separator();
+            ImGui::Text("Performance Settings:");
+            ImGui::SliderFloat("Update Interval", &newSettings.losUpdateInterval, 0.1f, 2.0f, "%.2f sec");
+            ImGui::SliderFloat("Max LoS Range", &newSettings.maxLoSRange, 20.0f, 200.0f, "%.1f yards");
+            
+            ImGui::Unindent();
+            
+            // LoS Status Information
+            ImGui::Separator();
+            ImGui::Text("LoS Status:");
+            ImGui::Text("Cache Size: %zu entries", m_losManager.GetCacheSize());
+            ImGui::Text("System Status: %s", m_losManager.IsInitialized() ? "INITIALIZED" : "NOT INITIALIZED");
+            
+            if (ImGui::Button("Clear LoS Cache")) {
+                m_losManager.ClearLoSCache();
+            }
+            
+            ImGui::SameLine();
+            
+            // Live LoS Status Display
+            ImGui::Text("Live LoS Status:");
+            if (m_liveTargetGUID.IsValid()) {
+                auto target = m_objectManager->GetObjectByGUID(m_liveTargetGUID);
+                if (target) {
+                    auto targetPos = target->GetPosition();
+                    Vector3 targetVec(targetPos.x, targetPos.y, targetPos.z);
+                    
+                    // Use player position with height offset for eye level (approximate camera position)
+                    Vector3 playerVec(m_livePlayerPos.x, m_livePlayerPos.y, m_livePlayerPos.z + 2.0f);  // +2.0 yards for eye height
+                    
+                    bool hasLoS = m_losManager.HasClearLineOfSight(playerVec, targetVec);
+                    float distance = playerVec.Distance(targetVec);
+                    
+                    // Display LoS status with color coding
+                    ImVec4 losColor = hasLoS ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) : ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
+                    ImGui::Text("Target: %s", target->GetName().c_str());
+                    ImGui::Text("Distance: %.1f yards", distance);
+                    ImGui::TextColored(losColor, "Line of Sight: %s", hasLoS ? "CLEAR" : "BLOCKED");
+                    
+                    // Show origin and target coordinates for debugging
+                    ImGui::Text("Player Eye: (%.1f, %.1f, %.1f)", playerVec.x, playerVec.y, playerVec.z);
+                    ImGui::Text("Target Pos: (%.1f, %.1f, %.1f)", targetVec.x, targetVec.y, targetVec.z);
+                    
+                    // Optional: Show LoS result details if available
+                    auto losResult = m_losManager.GetLoSResult(m_liveTargetGUID);
+                    if (losResult.isValid) {
+                        ImGui::Text("Hit Fraction: %.3f", losResult.hitFraction);
+                        if (losResult.isBlocked && losResult.hitObjectGUID.IsValid()) {
+                            ImGui::Text("Blocked by: 0x%llX", losResult.hitObjectGUID.ToUint64());
+                        }
+                    }
+                    
+                    // Manual test button (for logging/debugging)
+                    if (ImGui::Button("Log LoS Test")) {
+                        LOG_INFO("Manual LoS Test: " + std::string(hasLoS ? "CLEAR" : "BLOCKED") + 
+                            " (Distance: " + std::to_string(distance) + " yards)");
+                    }
+                    
+                    // Add LoS line if enabled
+                    if (m_losManager.GetSettings().showLoSLines) {
+                        extern WorldToScreenManager g_WorldToScreenManager;
+                        
+                        // Remove any existing LoS line
+                        if (m_losLineId != -1) {
+                            g_WorldToScreenManager.RemoveLine(m_losLineId);
+                            m_losLineId = -1;
+                        }
+                        
+                        // Get player position using the same method as PlayerTracker for consistent positioning
+                        C3Vector playerPosC3;
+                        if (g_WorldToScreenManager.GetPlayerPositionSafe(playerPosC3)) {
+                            // Add new LoS line with appropriate color
+                            D3DXVECTOR3 startPos(playerPosC3.x, playerPosC3.y, playerPosC3.z + 2.0f);  // +2 yards above head
+                            D3DXVECTOR3 endPos(targetVec.x, targetVec.y, targetVec.z);
+                            
+                            // Use green for clear LoS, red for blocked
+                            D3DCOLOR lineColor = hasLoS ? 0xFF00FF00 : 0xFFFF0000;  // Green : Red
+                            
+                            m_losLineId = g_WorldToScreenManager.AddLine(startPos, endPos, lineColor, 3.0f, "LoS_Line");
+                        }
+                    } else {
+                        // Clear LoS line if showing is disabled
+                        if (m_losLineId != -1) {
+                            extern WorldToScreenManager g_WorldToScreenManager;
+                            g_WorldToScreenManager.RemoveLine(m_losLineId);
+                            m_losLineId = -1;
+                        }
+                    }
+                    
+                } else {
+                    ImGui::Text("Target GUID valid but object not found");
+                }
+            } else {
+                ImGui::Text("No target selected");
+                
+                // Clear LoS line when no target
+                if (m_losLineId != -1) {
+                    extern WorldToScreenManager g_WorldToScreenManager;
+                    g_WorldToScreenManager.RemoveLine(m_losLineId);
+                    m_losLineId = -1;
+                }
+            }
+        }
+        
+        // Update settings if they changed
+        if (memcmp(&losSettings, &newSettings, sizeof(LoSSettings)) != 0) {
+            m_losManager.SetSettings(newSettings);
+            
+            // Clear LoS line if LoS checks were disabled
+            if (!newSettings.enableLoSChecks && m_losLineId != -1) {
+                extern WorldToScreenManager g_WorldToScreenManager;
+                g_WorldToScreenManager.RemoveLine(m_losLineId);
+                m_losLineId = -1;
+            }
+        }
     }
     
     ImGui::Separator();
@@ -277,9 +453,11 @@ void DrawingTab::Render() {
         if (ImGui::Button("Add Test Marker")) {
             // Add a test marker at player position
             extern WorldToScreenManager g_WorldToScreenManager;
-            C3Vector playerPos = GetLocalPlayerPosition();
-            D3DXVECTOR3 testPos(playerPos.x, playerPos.y, playerPos.z);
-            g_WorldToScreenManager.AddMarker(testPos, 0xFF00FF00, 30.0f, "TEST");
+            C3Vector playerPos;
+            if (g_WorldToScreenManager.GetPlayerPositionSafe(playerPos)) {
+                D3DXVECTOR3 testPos(playerPos.x, playerPos.y, playerPos.z);
+                g_WorldToScreenManager.AddMarker(testPos, 0xFF00FF00, 30.0f, "TEST");
+            }
         }
         
         ImGui::SameLine();
@@ -287,10 +465,12 @@ void DrawingTab::Render() {
         if (ImGui::Button("Add Screen Test")) {
             // Add a test marker at a fixed world position for testing
             extern WorldToScreenManager g_WorldToScreenManager;
-            C3Vector playerPos = GetLocalPlayerPosition();
-            // Add marker 10 units in front of player
-            D3DXVECTOR3 testPos(playerPos.x + 10.0f, playerPos.y, playerPos.z);
-            g_WorldToScreenManager.AddMarker(testPos, 0xFFFFFF00, 40.0f, "FRONT");
+            C3Vector playerPos;
+            if (g_WorldToScreenManager.GetPlayerPositionSafe(playerPos)) {
+                // Add marker 10 units in front of player
+                D3DXVECTOR3 testPos(playerPos.x + 10.0f, playerPos.y, playerPos.z);
+                g_WorldToScreenManager.AddMarker(testPos, 0xFFFFFF00, 40.0f, "FRONT");
+            }
         }
         
         ImGui::SameLine();
@@ -307,6 +487,7 @@ void DrawingTab::Render() {
             m_showGameObjectDistances = false;
             m_maxDrawDistance = 50.0f;
             m_onlyShowTargeted = false;
+            m_showPlayerToTargetLine = true;
             m_textScale = 1.0f;
             m_arrowSize = 20;
             
@@ -385,6 +566,7 @@ void DrawingTab::Render() {
             m_showGameObjectDistances = false;
             m_maxDrawDistance = 50.0f;
             m_onlyShowTargeted = false;
+            m_showPlayerToTargetLine = true;
             m_textScale = 1.0f;
             m_arrowSize = 20;
             
@@ -441,8 +623,11 @@ void DrawingTab::UpdateStatistics() {
     m_cachedGameObjectsInRange = 0;
     
     // Always fetch latest player position for UI
-    C3Vector livePlayerPos = GetLocalPlayerPosition();
-    m_livePlayerPos = livePlayerPos; // new member to display
+    C3Vector livePlayerPos;
+    extern WorldToScreenManager g_WorldToScreenManager;
+    if (g_WorldToScreenManager.GetPlayerPositionSafe(livePlayerPos)) {
+        m_livePlayerPos = livePlayerPos; // new member to display
+    }
     
     // Read current target guid directly
     uint64_t tgtGuid64 = Memory::Read<uint64_t>(CURRENT_TARGET_GUID_ADDR);

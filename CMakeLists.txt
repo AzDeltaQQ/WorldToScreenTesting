@@ -61,6 +61,7 @@ set(SOURCES
     core/drawing/components/MarkerManager.cpp
     core/drawing/components/PlayerTracker.cpp
     core/drawing/components/ObjectOverlay.cpp
+    core/drawing/components/LineOfSightManager.cpp
     core/logs/Logger.cpp
     core/types/types.cpp
     ${MINHOOK_SOURCES}
@@ -76,6 +77,7 @@ set(HEADERS
     core/drawing/components/LineManager.h
     core/drawing/components/MarkerManager.h
     core/drawing/components/PlayerTracker.h
+    core/drawing/components/LineOfSightManager.h
     core/logs/Logger.h
     core/memory/memory.h
     core/types/types.h

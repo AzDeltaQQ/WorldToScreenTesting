@@ -44,6 +44,11 @@ bool WorldToScreenManager::Initialize(LPDIRECT3DDEVICE9 pDevice) {
     m_playerTracker.Initialize(&m_worldToScreenCore, &m_lineManager, &m_markerManager);
     m_objectOverlay.Initialize(&m_worldToScreenCore, &m_renderEngine, nullptr); // ObjectManager set later
     
+    // Initialize Line of Sight manager
+    if (!m_losManager.Initialize()) {
+        LOG_WARNING("Failed to initialize LineOfSightManager - LoS features will be disabled");
+    }
+    
     // Sync settings
     m_playerTracker.showPlayerArrow = showPlayerArrow;
     m_playerTracker.playerArrowColor = playerArrowColor;
@@ -79,6 +84,7 @@ bool WorldToScreenManager::Initialize(LPDIRECT3DDEVICE9 pDevice) {
 }
 
 void WorldToScreenManager::Cleanup() {
+    m_losManager.Shutdown();
     m_playerTracker.Cleanup();
     m_markerManager.Cleanup();
     m_lineManager.Cleanup();
@@ -151,6 +157,11 @@ bool WorldToScreenManager::WorldToScreen(float worldX, float worldY, float world
     return m_worldToScreenCore.WorldToScreen(worldX, worldY, worldZ, screenX, screenY);
 }
 
+// Player position access (delegates to WorldToScreenCore)
+bool WorldToScreenManager::GetPlayerPositionSafe(C3Vector& playerPos) {
+    return m_worldToScreenCore.GetPlayerPositionSafe(playerPos);
+}
+
 // Get data for external use
 const std::vector<LineData>& WorldToScreenManager::GetLines() const {
     return m_lineManager.GetLines();
@@ -177,6 +188,7 @@ void WorldToScreenManager::Update() {
     
     // Sync settings
     m_playerTracker.showPlayerArrow = showPlayerArrow;
+    m_playerTracker.showPlayerToTargetLine = showPlayerToTargetLine;
     m_playerTracker.playerArrowColor = playerArrowColor;
     m_playerTracker.playerArrowSize = playerArrowSize;
     m_playerTracker.lineColor = lineColor;
@@ -222,6 +234,97 @@ void WorldToScreenManager::Update() {
         m_objectOverlay.Update();
     } catch (...) {
         LOG_WARNING("ObjectOverlay update failed");
+    }
+    
+    // Update Line of Sight manager
+    try {
+        if (m_losManager.IsInitialized()) {
+            // Get current player position for LoS updates (use same method as other systems)
+            C3Vector playerPosC3;
+            if (!GetPlayerPositionSafe(playerPosC3)) {
+                // If we can't get a valid player position, skip LoS updates
+                return;
+            }
+            // Convert to Vector3 only for LoS manager update
+            Vector3 playerPos(playerPosC3.x, playerPosC3.y, playerPosC3.z);
+            static float deltaTime = 1.0f / 60.0f; // Approximate frame time
+            m_losManager.Update(deltaTime, playerPos);
+            
+            // Add LoS lines to the rendering system if enabled
+            if (m_losManager.GetSettings().enableLoSChecks && m_losManager.GetSettings().showLoSLines) {
+                // Clear existing LoS lines (identified by label prefix)
+                static std::vector<int> losLineIds;
+                for (int id : losLineIds) {
+                    m_lineManager.RemoveLine(id);
+                }
+                losLineIds.clear();
+                
+                // Create LoS line to current target (similar to how PlayerTracker works)
+                auto objMgr = ObjectManager::GetInstance();
+                if (objMgr && objMgr->IsInitialized()) {
+                    // Read current target GUID from memory (same method as PlayerTracker)
+                    uint64_t tgtGuid64 = Memory::Read<uint64_t>(GameOffsets::CURRENT_TARGET_GUID_ADDR);
+                    WGUID tgtGuid(tgtGuid64);
+                    
+                    if (tgtGuid.IsValid()) {
+                        auto targetObj = objMgr->GetObjectByGUID(tgtGuid);
+                        if (targetObj) {
+                            // Use EXACT same approach as PlayerTracker
+                            // Get target position using Vector3 (same as PlayerTracker)
+                            Vector3 tgtPosV = targetObj->GetPosition();
+                            
+                            // Convert to D3DXVECTOR3: Both are now in the same coordinate system (same as PlayerTracker)
+                            D3DXVECTOR3 pPos(playerPosC3.x, playerPosC3.y, playerPosC3.z);
+                            D3DXVECTOR3 tPos(tgtPosV.x, tgtPosV.y, tgtPosV.z);
+                            
+                            // Perform LoS check using Vector3 for the LoS system
+                            Vector3 targetPosForLoS(tgtPosV.x, tgtPosV.y, tgtPosV.z);
+                            auto losResult = m_losManager.CheckLineOfSight(playerPos, targetPosForLoS, false);
+                            
+                            if (losResult.isValid) {
+                                // Create line using same coordinates as PlayerTracker
+                                D3DXVECTOR3 start = pPos;  // Use exact same approach as PlayerTracker
+                                D3DXVECTOR3 end;
+                                
+                                // Debug logging to compare with PlayerTracker coordinates
+                                static int debugCounter = 0;
+                                if (++debugCounter % 60 == 0) {  // Log once per second
+                                    LOG_DEBUG("LoS Line: Player(" + std::to_string(start.x) + "," + std::to_string(start.y) + "," + std::to_string(start.z) + 
+                                             ") Target(" + std::to_string(tPos.x) + "," + std::to_string(tPos.y) + "," + std::to_string(tPos.z) + ")");
+                                }
+                                D3DCOLOR lineColor;
+                                
+                                if (losResult.isBlocked) {
+                                    // Red line to hit point
+                                    end = D3DXVECTOR3(losResult.hitPoint.x, losResult.hitPoint.y, losResult.hitPoint.z);
+                                    auto& settings = m_losManager.GetSettings();
+                                    BYTE r = (BYTE)(settings.blockedLoSColor[0] * 255.0f);
+                                    BYTE g = (BYTE)(settings.blockedLoSColor[1] * 255.0f);
+                                    BYTE b = (BYTE)(settings.blockedLoSColor[2] * 255.0f);
+                                    BYTE a = (BYTE)(settings.blockedLoSColor[3] * 255.0f);
+                                    lineColor = (a << 24) | (r << 16) | (g << 8) | b;
+                                } else {
+                                    // Green line to target (use same target position as PlayerTracker)
+                                    end = tPos;  // Use same target coordinates as PlayerTracker
+                                    auto& settings = m_losManager.GetSettings();
+                                    BYTE r = (BYTE)(settings.clearLoSColor[0] * 255.0f);
+                                    BYTE g = (BYTE)(settings.clearLoSColor[1] * 255.0f);
+                                    BYTE b = (BYTE)(settings.clearLoSColor[2] * 255.0f);
+                                    BYTE a = (BYTE)(settings.clearLoSColor[3] * 255.0f);
+                                    lineColor = (a << 24) | (r << 16) | (g << 8) | b;
+                                }
+                                
+                                std::string label = "LoS_Target_" + std::to_string(tgtGuid.ToUint64());
+                                int lineId = m_lineManager.AddLine(start, end, lineColor, m_losManager.GetSettings().losLineWidth, label);
+                                losLineIds.push_back(lineId);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } catch (...) {
+        LOG_WARNING("LineOfSightManager update failed");
     }
     
     // Debug output every 600 updates (about once per 10 seconds at 60 FPS)
