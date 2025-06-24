@@ -57,8 +57,9 @@ enum OutcodeBits {
 // Forward declaration for WoW's WorldFrame structure
 struct CGWorldFrame;
 
-// WorldToScreen function pointer type based on your analysis
-typedef bool(__thiscall* WorldToScreenFn)(CGWorldFrame* worldFrame, const C3Vector* worldPos, C3Vector* screenPos, int* outcode);
+// WorldToScreen function pointer type based on assembly analysis
+// Function signature: bool __thiscall WorldToScreen(CGWorldFrame* this, float* worldPos, float* screenPos, int* outcode)
+typedef bool(__thiscall* WorldToScreenFn)(CGWorldFrame* worldFrame, float* worldPos, float* screenPos, int* outcode);
 
 // Function pointer type for EndScene
 typedef HRESULT(__stdcall* EndSceneFn)(IDirect3DDevice9* device);
@@ -70,7 +71,6 @@ typedef void(__thiscall* GetPositionFn)(void* pObject, C3Vector* pOutVec);
 // Game memory addresses - Original addresses from user's analysis
 constexpr uintptr_t WORLDFRAME_PTR = 0x00B7436C;      // Pointer to WorldFrame
 constexpr uintptr_t WORLDTOSCREEN_ADDR = 0x004F6D20;  // WorldToScreen function
-constexpr uintptr_t LUADOSTRING_ADDR = 0x00819210;    // LuaDoString function
 
 // Local player addresses
 constexpr uintptr_t GET_ACTIVE_PLAYER_OBJECT_ADDR = 0x004038F0; // getActivePlayerObject function
@@ -80,6 +80,11 @@ constexpr uintptr_t PLAYER_GETPOSITION_VTABLE_OFFSET = 0x2C;    // GetPosition v
 uintptr_t FindWorldFramePtr();
 uintptr_t FindWorldToScreenAddr();
 uintptr_t FindLuaDoStringAddr();
+
+// Address validation functions
+bool IsValidMemoryAddress(uintptr_t address, size_t size);
+bool IsValidCodeAddress(uintptr_t address);
+bool ValidateGameAddresses();
 
 // Player coordinate functions
 C3Vector GetLocalPlayerPosition();

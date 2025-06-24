@@ -8,6 +8,11 @@ set(CMAKE_SIZEOF_VOID_P 4)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# DirectX SDK paths
+set(DIRECTX_SDK_DIR "C:/Program Files (x86)/Microsoft DirectX SDK (June 2010)")
+set(DIRECTX_INCLUDE_DIR "${DIRECTX_SDK_DIR}/Include")
+set(DIRECTX_LIB_DIR "${DIRECTX_SDK_DIR}/Lib/x86")
+
 # Set output directory
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
@@ -24,19 +29,71 @@ set(MINHOOK_SOURCES
 # Add nlohmann/json (header-only library)
 set(JSON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/json-develop)
 
+# Add ImGui
+set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/ImGui)
+set(IMGUI_SOURCES
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_demo.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_dx9.cpp
+)
+
+# Core object manager system sources
+set(CORE_MEMORY_SOURCES
+    core/memory/memory.cpp
+)
+
+set(CORE_TYPES_SOURCES
+    core/types/types.cpp
+)
+
+set(CORE_OBJECTS_SOURCES
+    core/objects/WowObject.cpp
+    core/objects/WowUnit.cpp
+    core/objects/WowPlayer.cpp
+    core/objects/WowGameObject.cpp
+    core/objects/ObjectManager.cpp
+)
+
+set(CORE_GUI_SOURCES
+    core/gui/GUI.cpp
+    core/gui/tabs/ObjectsTab.cpp
+    core/gui/tabs/DrawingTab.cpp
+)
+
 # Source files
 set(SOURCES
     dllmain.cpp
     core/hook.cpp
-    core/worldtoscreen.cpp
+    core/drawing.cpp
     core/player.cpp
+    core/Logger.cpp
     ${MINHOOK_SOURCES}
+    ${IMGUI_SOURCES}
+    ${CORE_MEMORY_SOURCES}
+    ${CORE_TYPES_SOURCES}
+    ${CORE_OBJECTS_SOURCES}
+    ${CORE_GUI_SOURCES}
 )
 
 set(HEADERS
     core/hook.h
     core/types.h
-    core/worldtoscreen.h
+    core/drawing.h
+    core/Logger.h
+    core/memory/memory.h
+    core/types/types.h
+    core/objects/WowObject.h
+    core/objects/WowUnit.h
+    core/objects/WowPlayer.h
+    core/objects/WowGameObject.h
+    core/objects/ObjectManager.h
+    core/gui/GUI.h
+    core/gui/tabs/ObjectsTab.h
+    core/gui/tabs/DrawingTab.h
 )
 
 # Create the DLL
@@ -46,15 +103,29 @@ add_library(${PROJECT_NAME} SHARED ${SOURCES} ${HEADERS})
 target_include_directories(${PROJECT_NAME} 
     PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/memory
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/types
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/objects
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/gui
     ${CMAKE_CURRENT_SOURCE_DIR}/dependencies
     ${MINHOOK_DIR}/include
     ${JSON_DIR}/include
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${DIRECTX_INCLUDE_DIR}
+)
+
+# Link directories
+target_link_directories(${PROJECT_NAME} 
+    PRIVATE 
+    ${DIRECTX_LIB_DIR}
 )
 
 # Link libraries
 target_link_libraries(${PROJECT_NAME} 
     PRIVATE 
     d3d9
+    d3dx9
     user32
     kernel32
 )

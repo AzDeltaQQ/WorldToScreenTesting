@@ -1,61 +1,159 @@
 #include <Windows.h>
 #include "core/hook.h"
-#include "core/worldtoscreen.h"
+#include "core/drawing.h"
+#include "core/Logger.h"
 
 // Global instance
 extern WorldToScreenManager g_WorldToScreenManager;
+extern volatile bool g_shutdownRequested; // Use the global flag from hook.cpp
 
-// Timer for delayed initialization
-static DWORD g_initTimer = 0;
+// Thread tracking
+static HANDLE g_initThread = nullptr;
 static bool g_initialized = false;
 
 // Thread function for delayed initialization
 DWORD WINAPI DelayedInitialization(LPVOID lpParam) {
-    // Wait a bit for the process to stabilize
-    Sleep(2000); // Increased delay to allow WoW to fully load
+    LOG_INFO("Starting delayed initialization thread...");
     
-    // Initialize hooks with safety checks
+    // Wait in smaller chunks to allow for early termination if needed
+    for (int i = 0; i < 50; i++) { // 5 seconds total (50 * 100ms)
+        Sleep(100);
+        
+        // Check if shutdown was requested
+        if (g_shutdownRequested) {
+            LOG_INFO("Shutdown requested, aborting initialization");
+            return 0;
+        }
+        
+        // Check if the process is shutting down
+        if (GetModuleHandle(L"kernel32.dll") == NULL) {
+            LOG_INFO("Process shutting down, aborting initialization");
+            return 0;
+        }
+    }
+    
+    // Final shutdown check before initializing
+    if (g_shutdownRequested) {
+        LOG_INFO("Shutdown requested after delay, aborting");
+        return 0;
+    }
+    
+    LOG_INFO("Delay complete, initializing hooks...");
+    
+    // Initialize hooks with extensive safety checks
     try {
-        if (InitializeHooks()) {
-            // No need to add test arrows - Update() will automatically add player arrow
-            g_initialized = true;
+        // Verify we're still in a valid process state
+        HMODULE hKernel32 = GetModuleHandle(L"kernel32.dll");
+        if (!hKernel32) {
+            LOG_ERROR("kernel32.dll not available");
+            return 0;
+        }
+        
+        // Try to initialize hooks with retry logic
+        bool initSuccess = false;
+        for (int attempt = 1; attempt <= 3 && !g_shutdownRequested; attempt++) {
+            LOG_INFO("Hook initialization attempt " + std::to_string(attempt) + "/3");
+            
+            if (InitializeHooks()) {
+                LOG_INFO("Hooks initialized successfully!");
+                initSuccess = true;
+                g_initialized = true;
+                break;
+            } else {
+                LOG_ERROR("Hook initialization attempt " + std::to_string(attempt) + " failed");
+                
+                if (attempt < 3 && !g_shutdownRequested) {
+                    LOG_INFO("Waiting before retry...");
+                    // Wait in smaller chunks to allow for shutdown
+                    for (int j = 0; j < 20 && !g_shutdownRequested; j++) {
+                        Sleep(100); // 2 seconds total
+                    }
+                }
+            }
+        }
+        
+        if (!initSuccess) {
+            LOG_ERROR("All hook initialization attempts failed");
         }
     }
     catch (...) {
-        // Handle any initialization errors silently
+        LOG_ERROR("Exception during delayed initialization");
     }
     
+    LOG_INFO("Delayed initialization thread ending");
     return 0;
+}
+
+// Safe Logger initialization without exception handling
+static BOOL SafeInitializeLogger() {
+    // Just call Logger::Initialize() directly - it now has internal exception handling
+    Logger::Initialize();
+    return TRUE;
+}
+
+// Safe Logger shutdown without exception handling  
+static void SafeShutdownLogger() {
+    // Just call Logger::Shutdown() directly - it should be safe
+    Logger::Shutdown();
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
-    case DLL_PROCESS_ATTACH:
+        case DLL_PROCESS_ATTACH:
         {
-            // Disable DLL_THREAD_ATTACH and DLL_THREAD_DETACH notifications
+            // Initialize logger safely
+            if (!SafeInitializeLogger()) {
+                return FALSE;
+            }
+            
+            LOG_INFO("DLL_PROCESS_ATTACH started");
             DisableThreadLibraryCalls(hModule);
             
-            // Create a thread for delayed initialization to avoid DLL_PROCESS_ATTACH restrictions
-            HANDLE hThread = CreateThread(nullptr, 0, DelayedInitialization, hModule, 0, nullptr);
-            if (hThread) {
-                CloseHandle(hThread); // We don't need to wait for it
+            // Reset shutdown flag
+            g_shutdownRequested = false;
+            
+            // Create initialization thread
+            g_initThread = CreateThread(nullptr, 0, DelayedInitialization, nullptr, 0, nullptr);
+            
+            if (!g_initThread) {
+                LOG_ERROR("Failed to create initialization thread!");
+                return FALSE;
             }
+            
+            LOG_INFO("Initialization thread created successfully");
             break;
         }
         
-    case DLL_PROCESS_DETACH:
+        case DLL_PROCESS_DETACH:
         {
-            // Cleanup only if we were initialized
-            if (g_initialized) {
-                __try {
-                    ShutdownHooks();
-                }
-                __except(EXCEPTION_EXECUTE_HANDLER) {
-                    // Handle cleanup errors silently
-                }
+            LOG_INFO("DLL_PROCESS_DETACH received");
+            
+            // Signal shutdown to any running threads
+            g_shutdownRequested = true;
+            
+            // Close init thread handle without waiting (waiting can deadlock under loader lock)
+            if (g_initThread) {
+                CloseHandle(g_initThread);
+                g_initThread = nullptr;
             }
+            
+            // Spawn a detached thread to perform cleanup outside loader lock
+            HANDLE hCleanup = CreateThread(nullptr, 0, [](LPVOID lp)->DWORD {
+                bool isTerminating = (lp != nullptr);
+                CleanupHook(isTerminating);
+                SafeShutdownLogger();
+                return 0;
+            }, lpReserved, 0, nullptr);
+            if (hCleanup) {
+                CloseHandle(hCleanup); // We don't need to wait
+            }
+            
             break;
         }
+        
+        case DLL_THREAD_ATTACH:
+        case DLL_THREAD_DETACH:
+            break;
     }
     return TRUE;
 } 
