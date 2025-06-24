@@ -41,47 +41,40 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_dx9.cpp
 )
 
-# Core object manager system sources
-set(CORE_MEMORY_SOURCES
-    core/memory/memory.cpp
-)
-
-set(CORE_TYPES_SOURCES
-    core/types/types.cpp
-)
-
-set(CORE_OBJECTS_SOURCES
-    core/objects/WowObject.cpp
-    core/objects/WowUnit.cpp
-    core/objects/WowPlayer.cpp
-    core/objects/WowGameObject.cpp
-    core/objects/ObjectManager.cpp
-)
-
-set(CORE_GUI_SOURCES
-    core/gui/GUI.cpp
-    core/gui/tabs/ObjectsTab.cpp
-    core/gui/tabs/DrawingTab.cpp
-)
-
 # Source files
 set(SOURCES
     dllmain.cpp
     core/hook.cpp
+    core/memory/memory.cpp
+    core/objects/ObjectManager.cpp
+    core/objects/WowObject.cpp
+    core/objects/WowPlayer.cpp
+    core/objects/WowUnit.cpp
+    core/objects/WowGameObject.cpp
+    core/gui/GUI.cpp
+    core/gui/tabs/DrawingTab.cpp
+    core/gui/tabs/ObjectsTab.cpp
     core/drawing/drawing.cpp
+    core/drawing/components/WorldToScreenCore.cpp
+    core/drawing/components/RenderEngine.cpp
+    core/drawing/components/LineManager.cpp
+    core/drawing/components/MarkerManager.cpp
+    core/drawing/components/PlayerTracker.cpp
     core/logs/Logger.cpp
+    core/types/types.cpp
     ${MINHOOK_SOURCES}
     ${IMGUI_SOURCES}
-    ${CORE_MEMORY_SOURCES}
-    ${CORE_TYPES_SOURCES}
-    ${CORE_OBJECTS_SOURCES}
-    ${CORE_GUI_SOURCES}
 )
 
 set(HEADERS
     core/hook.h
     core/types.h
     core/drawing/drawing.h
+    core/drawing/components/WorldToScreenCore.h
+    core/drawing/components/RenderEngine.h
+    core/drawing/components/LineManager.h
+    core/drawing/components/MarkerManager.h
+    core/drawing/components/PlayerTracker.h
     core/logs/Logger.h
     core/memory/memory.h
     core/types/types.h
@@ -103,6 +96,7 @@ target_include_directories(${PROJECT_NAME}
     PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/core
     ${CMAKE_CURRENT_SOURCE_DIR}/core/drawing
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/drawing/components
     ${CMAKE_CURRENT_SOURCE_DIR}/core/logs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/memory
     ${CMAKE_CURRENT_SOURCE_DIR}/core/types

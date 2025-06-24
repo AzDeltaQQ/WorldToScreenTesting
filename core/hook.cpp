@@ -124,7 +124,7 @@ HRESULT __stdcall HookedEndScene(IDirect3DDevice9* device) {
 
     // Only update if safely initialized
     if (g_HooksInitialized) {
-        g_WorldToScreenManager.Update();
+        // Remove this duplicate Update() call - we'll do it later with proper synchronization
         
         // Initialize ImGui if not already done
         if (!g_ImGuiInitialized && device && g_WowWindow) {
