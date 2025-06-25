@@ -17,7 +17,7 @@ ObjectsTab::ObjectsTab()
     , m_showUnits(true)
     , m_showGameObjects(true)
     , m_showOther(false)
-    , m_maxDistance(100.0f)
+    , m_maxDistance(200.0f)
     , m_nameFilter("")
     , m_selectedObjectGuid()
     , m_totalObjectCount(0)
@@ -320,6 +320,11 @@ bool ObjectsTab::PassesNameFilter(const std::string& objectName) const {
         return true;
     }
     
+    // Handle empty object names - allow them to pass if no specific filter is set
+    if (objectName.empty()) {
+        return true; // Changed: allow empty names to pass through
+    }
+    
     // Case-insensitive search
     std::string lowerName = objectName;
     std::string lowerFilter = m_nameFilter;
@@ -340,13 +345,27 @@ float ObjectsTab::CalculateDistanceToPlayer(std::shared_ptr<WowObject> obj) cons
     
     auto localPlayer = m_objectManager->GetLocalPlayer();
     if (!localPlayer) {
-        return 999.0f;
+        // If no local player, return a reasonable distance so objects still show
+        // This allows viewing objects even when local player detection fails
+        return 50.0f; // Changed from 999.0f to 50.0f
     }
     
     auto playerPos = localPlayer->GetPosition();
     auto objPos = obj->GetPosition();
     
-    return playerPos.Distance(objPos);
+    // Check for zero positions which indicate invalid data
+    if (playerPos.IsZero() || objPos.IsZero()) {
+        return 50.0f; // Return reasonable distance for invalid positions
+    }
+    
+    float distance = playerPos.Distance(objPos);
+    
+    // Clamp unreasonable distances
+    if (distance > 1000.0f || distance < 0.0f) {
+        return 50.0f;
+    }
+    
+    return distance;
 }
 
 std::string ObjectsTab::FormatDistance(float distance) const {

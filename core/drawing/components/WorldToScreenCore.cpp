@@ -136,17 +136,6 @@ bool WorldToScreenCore::WorldToScreen(const D3DXVECTOR3& worldPos, D3DXVECTOR2& 
         screenPos.x = (ndcX + 1.0f) * 0.5f * viewport.Width;
         screenPos.y = (1.0f - ndcY) * 0.5f * viewport.Height; // Flip Y axis
         
-        // Debug log occasionally
-        static int debugCount = 0;
-        if (++debugCount % 600 == 0) {
-            LOG_DEBUG("Custom WorldToScreen: world(" + std::to_string(worldPos.x) + "," + 
-                     std::to_string(worldPos.y) + "," + std::to_string(worldPos.z) + 
-                     ") -> screen(" + std::to_string(screenPos.x) + "," + 
-                     std::to_string(screenPos.y) + ") ndc(" + std::to_string(ndcX) + "," + 
-                     std::to_string(ndcY) + "," + std::to_string(ndcZ) + ")" +
-                     " behindCamera=" + std::to_string(behindCamera) + " outsideDepth=" + std::to_string(outsideDepth));
-        }
-        
         // Return true only if point is properly visible, but coordinates are ALWAYS set
         return !behindCamera && !outsideDepth;
         

@@ -301,12 +301,6 @@ void WorldToScreenManager::Update() {
                                 start.z += 2.5f;  // Raise LoS line start to eye level (2.5 units above feet)
                                 D3DXVECTOR3 end;
                                 
-                                // Debug logging to compare with PlayerTracker coordinates
-                                static int debugCounter = 0;
-                                if (++debugCounter % 60 == 0) {  // Log once per second
-                                    LOG_DEBUG("LoS Line: Player(" + std::to_string(start.x) + "," + std::to_string(start.y) + "," + std::to_string(start.z) + 
-                                             ") Target(" + std::to_string(tPos.x) + "," + std::to_string(tPos.y) + "," + std::to_string(tPos.z) + ")");
-                                }
                                 D3DCOLOR lineColor;
                                 
                                 // Both blocked and clear lines go to the target, only color changes
@@ -340,15 +334,6 @@ void WorldToScreenManager::Update() {
         }
     } catch (...) {
         LOG_WARNING("LineOfSightManager update failed");
-    }
-    
-    // Debug output every 600 updates (about once per 10 seconds at 60 FPS)
-    if (updateCount % 600 == 0) {
-        int visibleMarkers = m_markerManager.GetVisibleCount();
-        LOG_DEBUG("Update #" + std::to_string(updateCount) + ": " + 
-                 std::to_string(m_markerManager.GetMarkerCount()) + " markers total, " + 
-                 std::to_string(visibleMarkers) + " visible, " +
-                 std::to_string(m_lineManager.GetLineCount()) + " lines");
     }
 }
 
