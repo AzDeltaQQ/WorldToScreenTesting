@@ -75,15 +75,6 @@ void MarkerManager::Update() {
         marker.isVisible = m_pWorldToScreen->WorldToScreen(marker.worldPos, screenPos);
         if (marker.isVisible) {
             marker.screenPos = screenPos;
-        } else {
-            // Debug log why WorldToScreen failed occasionally
-            static int debugCounter = 0;
-            if (++debugCounter % 600 == 0) { // Log every 10 seconds
-                LOG_DEBUG("WorldToScreen failed for marker " + marker.label + 
-                         " at pos (" + std::to_string(marker.worldPos.x) + ", " + 
-                         std::to_string(marker.worldPos.y) + ", " + 
-                         std::to_string(marker.worldPos.z) + ")");
-            }
         }
     }
 }

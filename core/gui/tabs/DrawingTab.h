@@ -6,6 +6,7 @@
 #include "../../types.h"
 #include "../../types/types.h"
 #include "../../drawing/components/LineOfSightManager.h"
+#include "../../drawing/components/TextureManager.h"
 
 // Forward declarations
 class ObjectManager;
@@ -57,6 +58,11 @@ namespace GUI {
         // Line of Sight Manager
         LineOfSightManager m_losManager;
         int m_losLineId = -1;  // Track LoS line for cleanup
+        
+        // Texture Manager Settings
+        TextureSearchSettings m_textureSettings;
+        std::string m_selectedTexturePath;
+        std::vector<std::string> m_filteredTextures;
         
         void UpdateStatistics();
 

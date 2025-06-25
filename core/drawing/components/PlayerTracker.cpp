@@ -78,13 +78,6 @@ void PlayerTracker::UpdatePlayerArrow() {
         // Player arrow exists, update its properties (color and size) as well
         m_pMarkerManager->UpdateMarkerProperties("YOU", playerArrowColor, playerArrowSize);
     }
-    
-    // Debug log position updates occasionally
-    static int updateCounter = 0;
-    if (++updateCounter % 600 == 0) {
-        LOG_DEBUG("Updated player arrow position to (" + std::to_string(playerPos.x) + ", " + 
-                 std::to_string(playerPos.y) + ", " + std::to_string(playerPos.z) + ")");
-    }
 }
 
 void PlayerTracker::UpdatePlayerToTargetLine() {
@@ -120,11 +113,11 @@ void PlayerTracker::UpdatePlayerToTargetLine() {
         return;
     }
     
-    // Read current target GUID from memory (same method as GUI)
+    // Read current target GUID from memory
     uint64_t tgtGuid64 = Memory::Read<uint64_t>(GameOffsets::CURRENT_TARGET_GUID_ADDR);
     WGUID tgtGuid(tgtGuid64);
     
-    // Check if we have a valid target (same validation as GUI)
+    // Check if we have a valid target
     bool hasValidTarget = tgtGuid.IsValid();
     
     // Debug logging for target state changes
@@ -152,15 +145,6 @@ void PlayerTracker::UpdatePlayerToTargetLine() {
                 // Convert to D3DXVECTOR3: Both are now in the same coordinate system
                 D3DXVECTOR3 pPos(playerPosC3.x, playerPosC3.y, playerPosC3.z);
                 D3DXVECTOR3 tPos(tgtPosV.x, tgtPosV.y, tgtPosV.z);
-                
-                // Debug log position updates occasionally
-                static int posUpdateCounter = 0;
-                if (++posUpdateCounter % 60 == 0) {  // Match LoS logging frequency
-                    float distance = sqrt(pow(pPos.x - tPos.x, 2) + pow(pPos.y - tPos.y, 2) + pow(pPos.z - tPos.z, 2));
-                    LOG_DEBUG("PlayerTracker Line: Player(" + std::to_string(pPos.x) + "," + std::to_string(pPos.y) + "," + std::to_string(pPos.z) + 
-                             ") Target(" + std::to_string(tPos.x) + "," + std::to_string(tPos.y) + "," + std::to_string(tPos.z) + 
-                             ") Distance=" + std::to_string(distance) + " yards");
-                }
                 
                 // Remove old line each frame to keep simple
                 if (m_targetLineId != -1) m_pLineManager->RemoveLine(m_targetLineId);

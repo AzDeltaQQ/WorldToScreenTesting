@@ -36,7 +36,7 @@ struct LoSSettings {
     float maxLoSRange;          // Maximum range for LoS checks (yards)
     
     LoSSettings() {
-        enableLoSChecks = false;
+        enableLoSChecks = true;   // Enable by default so LoS lines show without GUI
         showLoSLines = true;
         useLoSForTargeting = false;
         showBlockedTargets = true;

@@ -123,6 +123,16 @@ void DrawingTab::Update(float deltaTime) {
     g_WorldToScreenManager.showGameObjectDistances = m_showGameObjectDistances;
     g_WorldToScreenManager.showPlayerToTargetLine = m_showPlayerToTargetLine;
     
+    // Synchronize LoS settings with the main drawing system
+    if (m_losManager.IsInitialized() && g_WorldToScreenManager.GetLoSManager().IsInitialized()) {
+        auto currentSettings = m_losManager.GetSettings();
+        g_WorldToScreenManager.GetLoSManager().SetSettings(currentSettings);
+    }
+    
+    // Synchronize texture settings with the main drawing system
+    auto currentTextureSettings = m_textureSettings;
+    g_WorldToScreenManager.GetTextureManager().SetSettings(currentTextureSettings);
+    
     // Update Line of Sight manager
     if (m_losManager.IsInitialized()) {
         Vector3 playerPos(m_livePlayerPos.x, m_livePlayerPos.y, m_livePlayerPos.z);
@@ -296,8 +306,8 @@ void DrawingTab::Render() {
                             " (Distance: " + std::to_string(distance) + " yards)");
                     }
                     
-                    // Add LoS line if enabled
-                    if (m_losManager.GetSettings().showLoSLines) {
+                    // Add LoS line if enabled (DISABLED - main system handles this now)
+                    if (false && m_losManager.GetSettings().showLoSLines) {
                         extern WorldToScreenManager g_WorldToScreenManager;
                         
                         // Remove any existing LoS line
@@ -362,6 +372,127 @@ void DrawingTab::Render() {
         ImGui::SliderFloat("Text Scale", &m_textScale, 0.5f, 2.0f, "%.1f");
         ImGui::ColorEdit4("Text Color", m_textColor);
         ImGui::ColorEdit4("Distance Color", m_distanceColor);
+    }
+    
+    ImGui::Separator();
+    
+    // Texture Search & Rendering Section
+    if (ImGui::CollapsingHeader("Texture Search & Rendering")) {
+        ImGui::Checkbox("Enable Texture Rendering", &m_textureSettings.enableTextureRendering);
+        
+        if (m_textureSettings.enableTextureRendering) {
+            ImGui::Indent();
+            
+            // Display settings
+            ImGui::Checkbox("Show Texture Labels", &m_textureSettings.showTextureLabels);
+            ImGui::Checkbox("Only Show In Range", &m_textureSettings.onlyShowInRange);
+            ImGui::Checkbox("Billboard Textures", &m_textureSettings.billboardTextures);
+            
+            if (m_textureSettings.onlyShowInRange) {
+                ImGui::SliderFloat("Max Render Distance", &m_textureSettings.maxRenderDistance, 10.0f, 500.0f, "%.1f yards");
+            }
+            
+            ImGui::SliderFloat("Default Texture Size", &m_textureSettings.defaultTextureSize, 16.0f, 128.0f, "%.1f px");
+            ImGui::SliderFloat("Default Scale", &m_textureSettings.defaultTextureScale, 0.1f, 3.0f, "%.1f");
+            
+            ImGui::Separator();
+            ImGui::Text("Search Filters:");
+            
+            // Search input
+            static char searchBuffer[256] = "";
+            if (ImGui::InputText("Search", searchBuffer, sizeof(searchBuffer))) {
+                m_textureSettings.searchFilter = std::string(searchBuffer);
+                // Update filtered list
+                extern WorldToScreenManager g_WorldToScreenManager;
+                m_filteredTextures = g_WorldToScreenManager.GetTextureManager().SearchTextures(m_textureSettings.searchFilter);
+            }
+            
+            // Category filters
+            ImGui::Checkbox("Interface Textures", &m_textureSettings.showInterfaceTextures);
+            ImGui::SameLine();
+            ImGui::Checkbox("Spell Textures", &m_textureSettings.showSpellTextures);
+            ImGui::Checkbox("Item Textures", &m_textureSettings.showItemTextures);
+            ImGui::SameLine();
+            ImGui::Checkbox("Environment Textures", &m_textureSettings.showEnvironmentTextures);
+            
+            // Update filtered list when filters change
+            extern WorldToScreenManager g_WorldToScreenManager;
+            m_filteredTextures = g_WorldToScreenManager.GetTextureManager().SearchTextures(m_textureSettings.searchFilter);
+            
+            ImGui::Separator();
+            ImGui::Text("Available Textures:");
+            
+            // Texture list
+            if (ImGui::BeginListBox("##TextureList", ImVec2(-1, 150))) {
+                for (const auto& texturePath : m_filteredTextures) {
+                    bool isSelected = (m_selectedTexturePath == texturePath);
+                    if (ImGui::Selectable(texturePath.c_str(), isSelected)) {
+                        m_selectedTexturePath = texturePath;
+                    }
+                    if (isSelected) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndListBox();
+            }
+            
+            // Add texture button
+            if (ImGui::Button("Add Texture at Player Position") && !m_selectedTexturePath.empty()) {
+                C3Vector playerPos;
+                if (g_WorldToScreenManager.GetPlayerPositionSafe(playerPos)) {
+                    D3DXVECTOR3 pos(playerPos.x, playerPos.y, playerPos.z + 2.0f); // Slightly above player
+                    
+                    // Extract filename for label
+                    std::string label = m_selectedTexturePath;
+                    size_t lastSlash = label.find_last_of("\\");
+                    if (lastSlash != std::string::npos) {
+                        label = label.substr(lastSlash + 1);
+                    }
+                    
+                    g_WorldToScreenManager.GetTextureManager().AddTextureAtPosition(
+                        m_selectedTexturePath, pos, m_textureSettings.defaultTextureSize, 0xFFFFFFFF, label);
+                }
+            }
+            
+            ImGui::SameLine();
+            
+            if (ImGui::Button("Add Texture at Target Position") && !m_selectedTexturePath.empty() && m_liveTargetGUID.IsValid()) {
+                auto target = m_objectManager->GetObjectByGUID(m_liveTargetGUID);
+                if (target) {
+                    auto targetPos = target->GetPosition();
+                    D3DXVECTOR3 pos(targetPos.x, targetPos.y, targetPos.z + 2.0f); // Slightly above target
+                    
+                    // Extract filename for label
+                    std::string label = m_selectedTexturePath;
+                    size_t lastSlash = label.find_last_of("\\");
+                    if (lastSlash != std::string::npos) {
+                        label = label.substr(lastSlash + 1);
+                    }
+                    
+                    g_WorldToScreenManager.GetTextureManager().AddTextureAtPosition(
+                        m_selectedTexturePath, pos, m_textureSettings.defaultTextureSize, 0xFFFFFFFF, label);
+                }
+            }
+            
+            ImGui::Separator();
+            
+            // Texture statistics
+            ImGui::Text("Texture Statistics:");
+            ImGui::Text("Rendered Textures: %zu", g_WorldToScreenManager.GetTextureManager().GetRenderTextureCount());
+            ImGui::Text("Rendered Textures: %zu", g_WorldToScreenManager.GetTextureManager().GetRenderTextureCount());
+            
+            if (ImGui::Button("Clear All Textures")) {
+                g_WorldToScreenManager.GetTextureManager().ClearAllTextures();
+            }
+            
+            ImGui::SameLine();
+            
+            if (ImGui::Button("Clear Texture Cache")) {
+                g_WorldToScreenManager.GetTextureManager().ClearAllTextures();
+            }
+            
+            ImGui::Unindent();
+        }
     }
     
     ImGui::Separator();

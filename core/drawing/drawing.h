@@ -8,6 +8,7 @@
 #include "components/PlayerTracker.h"
 #include "components/ObjectOverlay.h"
 #include "components/LineOfSightManager.h"
+#include "components/TextureManager.h"
 #include <d3d9.h>
 #include <d3dx9.h>
 
@@ -23,6 +24,7 @@ private:
     PlayerTracker m_playerTracker;
     ObjectOverlay m_objectOverlay;
     LineOfSightManager m_losManager;
+    TextureManager m_textureManager;
     
     // Device reference
     LPDIRECT3DDEVICE9 m_pDevice;
@@ -105,4 +107,8 @@ public:
     // Line of Sight management
     LineOfSightManager& GetLoSManager() { return m_losManager; }
     const LineOfSightManager& GetLoSManager() const { return m_losManager; }
+    
+    // Texture management
+    TextureManager& GetTextureManager() { return m_textureManager; }
+    const TextureManager& GetTextureManager() const { return m_textureManager; }
 }; 

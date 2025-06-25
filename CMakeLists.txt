@@ -62,6 +62,7 @@ set(SOURCES
     core/drawing/components/PlayerTracker.cpp
     core/drawing/components/ObjectOverlay.cpp
     core/drawing/components/LineOfSightManager.cpp
+    core/drawing/components/TextureManager.cpp
     core/logs/Logger.cpp
     core/types/types.cpp
     ${MINHOOK_SOURCES}
@@ -78,6 +79,7 @@ set(HEADERS
     core/drawing/components/MarkerManager.h
     core/drawing/components/PlayerTracker.h
     core/drawing/components/LineOfSightManager.h
+    core/drawing/components/TextureManager.h
     core/logs/Logger.h
     core/memory/memory.h
     core/types/types.h
@@ -93,6 +95,14 @@ set(HEADERS
 
 # Create the DLL
 add_library(${PROJECT_NAME} SHARED ${SOURCES} ${HEADERS})
+
+# Copy BLP folder to build directory
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/blps
+    ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/blps
+    COMMENT "Copying BLP files to build directory"
+)
 
 # Include directories
 target_include_directories(${PROJECT_NAME} 

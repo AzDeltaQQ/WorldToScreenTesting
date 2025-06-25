@@ -49,6 +49,11 @@ bool WorldToScreenManager::Initialize(LPDIRECT3DDEVICE9 pDevice) {
         LOG_WARNING("Failed to initialize LineOfSightManager - LoS features will be disabled");
     }
     
+    // Initialize Texture manager
+    if (!m_textureManager.Initialize(&m_worldToScreenCore, &m_renderEngine, pDevice)) {
+        LOG_WARNING("Failed to initialize TextureManager - texture features will be disabled");
+    }
+    
     // Sync settings
     m_playerTracker.showPlayerArrow = showPlayerArrow;
     m_playerTracker.playerArrowColor = playerArrowColor;
@@ -84,6 +89,7 @@ bool WorldToScreenManager::Initialize(LPDIRECT3DDEVICE9 pDevice) {
 }
 
 void WorldToScreenManager::Cleanup() {
+    m_textureManager.Cleanup();
     m_losManager.Shutdown();
     m_playerTracker.Cleanup();
     m_markerManager.Cleanup();
@@ -96,11 +102,13 @@ void WorldToScreenManager::Cleanup() {
 }
 
 void WorldToScreenManager::OnDeviceLost() {
+    m_textureManager.OnDeviceLost();
     m_renderEngine.OnDeviceLost();
     m_worldToScreenCore.OnDeviceLost();
 }
 
 void WorldToScreenManager::OnDeviceReset() {
+    m_textureManager.OnDeviceReset();
     m_renderEngine.OnDeviceReset();
     m_worldToScreenCore.OnDeviceReset();
 }
@@ -236,6 +244,12 @@ void WorldToScreenManager::Update() {
         LOG_WARNING("ObjectOverlay update failed");
     }
     
+    try {
+        m_textureManager.Update();
+    } catch (...) {
+        LOG_WARNING("TextureManager update failed");
+    }
+    
     // Update Line of Sight manager
     try {
         if (m_losManager.IsInitialized()) {
@@ -282,8 +296,9 @@ void WorldToScreenManager::Update() {
                             auto losResult = m_losManager.CheckLineOfSight(playerPos, targetPosForLoS, false);
                             
                             if (losResult.isValid) {
-                                // Create line using same coordinates as PlayerTracker
-                                D3DXVECTOR3 start = pPos;  // Use exact same approach as PlayerTracker
+                                // Create line using same coordinates as PlayerTracker, but raise start point to eye level
+                                D3DXVECTOR3 start = pPos;
+                                start.z += 2.5f;  // Raise LoS line start to eye level (2.5 units above feet)
                                 D3DXVECTOR3 end;
                                 
                                 // Debug logging to compare with PlayerTracker coordinates
@@ -294,19 +309,19 @@ void WorldToScreenManager::Update() {
                                 }
                                 D3DCOLOR lineColor;
                                 
+                                // Both blocked and clear lines go to the target, only color changes
+                                end = tPos;  // Always go to target position (same as PlayerTracker)
+                                
+                                auto& settings = m_losManager.GetSettings();
                                 if (losResult.isBlocked) {
-                                    // Red line to hit point
-                                    end = D3DXVECTOR3(losResult.hitPoint.x, losResult.hitPoint.y, losResult.hitPoint.z);
-                                    auto& settings = m_losManager.GetSettings();
+                                    // Red line to target (blocked LoS)
                                     BYTE r = (BYTE)(settings.blockedLoSColor[0] * 255.0f);
                                     BYTE g = (BYTE)(settings.blockedLoSColor[1] * 255.0f);
                                     BYTE b = (BYTE)(settings.blockedLoSColor[2] * 255.0f);
                                     BYTE a = (BYTE)(settings.blockedLoSColor[3] * 255.0f);
                                     lineColor = (a << 24) | (r << 16) | (g << 8) | b;
                                 } else {
-                                    // Green line to target (use same target position as PlayerTracker)
-                                    end = tPos;  // Use same target coordinates as PlayerTracker
-                                    auto& settings = m_losManager.GetSettings();
+                                    // Green line to target (clear LoS)
                                     BYTE r = (BYTE)(settings.clearLoSColor[0] * 255.0f);
                                     BYTE g = (BYTE)(settings.clearLoSColor[1] * 255.0f);
                                     BYTE b = (BYTE)(settings.clearLoSColor[2] * 255.0f);
@@ -345,6 +360,7 @@ void WorldToScreenManager::Render() {
         m_lineManager.Render();
         m_markerManager.Render();
         m_objectOverlay.Render(); // Render object names and distances
+        m_textureManager.Render(); // Render textures
     } catch (...) {
         // Log error but don't crash
         static int errorCount = 0;
