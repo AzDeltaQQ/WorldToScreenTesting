@@ -11,6 +11,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cstring>
+#include <unordered_map>
 #include "../../types.h"
 
 namespace GUI {
@@ -476,10 +477,58 @@ void DrawingTab::Render() {
             
             ImGui::Separator();
             
+            // Active Texture Management
+            const auto& activeTextures = g_WorldToScreenManager.GetTextureManager().GetRenderTextures();
+            if (!activeTextures.empty()) {
+                ImGui::Text("Active Textures:");
+                
+                if (ImGui::BeginTable("ActiveTextures", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                    ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+                    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Scale", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                    ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                    ImGui::TableHeadersRow();
+                    
+                    for (const auto& texture : activeTextures) {
+                        ImGui::TableNextRow();
+                        
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Text("%d", texture.id);
+                        
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%s", texture.label.c_str());
+                        
+                        ImGui::TableSetColumnIndex(2);
+                        static std::unordered_map<int, float> scaleValues;
+                        if (scaleValues.find(texture.id) == scaleValues.end()) {
+                            scaleValues[texture.id] = texture.scale;
+                        }
+                        
+                        ImGui::PushID(texture.id);
+                        if (ImGui::SliderFloat("##scale", &scaleValues[texture.id], 0.01f, 2.0f, "%.2f")) {
+                            g_WorldToScreenManager.GetTextureManager().UpdateTextureScale(texture.id, scaleValues[texture.id]);
+                        }
+                        ImGui::PopID();
+                        
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::PushID(texture.id);
+                        if (ImGui::Button("X")) {
+                            g_WorldToScreenManager.GetTextureManager().RemoveTexture(texture.id);
+                            scaleValues.erase(texture.id);
+                        }
+                        ImGui::PopID();
+                    }
+                    
+                    ImGui::EndTable();
+                }
+                
+                ImGui::Separator();
+            }
+            
             // Texture statistics
             ImGui::Text("Texture Statistics:");
             ImGui::Text("Rendered Textures: %zu", g_WorldToScreenManager.GetTextureManager().GetRenderTextureCount());
-            ImGui::Text("Rendered Textures: %zu", g_WorldToScreenManager.GetTextureManager().GetRenderTextureCount());
+            ImGui::Text("Available Textures: %zu", g_WorldToScreenManager.GetTextureManager().GetCommonTexturePaths().size());
             
             if (ImGui::Button("Clear All Textures")) {
                 g_WorldToScreenManager.GetTextureManager().ClearAllTextures();
@@ -487,8 +536,11 @@ void DrawingTab::Render() {
             
             ImGui::SameLine();
             
-            if (ImGui::Button("Clear Texture Cache")) {
-                g_WorldToScreenManager.GetTextureManager().ClearAllTextures();
+            if (ImGui::Button("Hot Reload Textures")) {
+                if (g_WorldToScreenManager.GetTextureManager().HotReloadTexturesFromSource()) {
+                    // Update the filtered texture list after hot reload
+                    m_filteredTextures = g_WorldToScreenManager.GetTextureManager().SearchTextures(m_textureSettings.searchFilter);
+                }
             }
             
             ImGui::Unindent();

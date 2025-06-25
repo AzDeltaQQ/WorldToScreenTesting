@@ -108,7 +108,14 @@ bool TextureManager::Initialize(WorldToScreenCore* pWorldToScreen, RenderEngine*
 
 void TextureManager::Cleanup() {
     m_renderTextures.clear();
-    ClearTextureCache();
+    
+    // Clear texture cache manually
+    for (auto& pair : m_textureCache) {
+        if (pair.second) {
+            pair.second->Release();
+        }
+    }
+    m_textureCache.clear();
     
     if (m_pSprite) {
         m_pSprite->Release();
@@ -464,15 +471,55 @@ IDirect3DTexture9* TextureManager::CreateFallbackTexture() {
 }
 
 void TextureManager::PopulateCommonTextures() {
-    m_commonTexturePaths = {
-        "TRAP.BLP",  // Our test BLP file
-        "test_texture.png",
-        "test_texture.bmp",
-        "test_texture.dds",
-        "icon.png",
-        "marker.bmp",
-        "arrow.dds"
-    };
+    m_commonTexturePaths.clear();
+    
+    std::string targetPath = GetTargetBlpsPath();
+    if (targetPath.empty()) {
+        LOG_ERROR("TextureManager: Could not get target blps path");
+        return;
+    }
+    
+    LOG_DEBUG("TextureManager: Scanning for textures in: " + targetPath);
+    
+    // Find all texture files in the target directory
+    WIN32_FIND_DATAA findData;
+    std::string searchPattern = targetPath + "\\*.*";
+    HANDLE hFind = FindFirstFileA(searchPattern.c_str(), &findData);
+    
+    if (hFind == INVALID_HANDLE_VALUE) {
+        DWORD error = GetLastError();
+        LOG_WARNING("TextureManager: Could not scan directory: " + targetPath + " (Error: " + std::to_string(error) + ")");
+        return;
+    }
+    
+    do {
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            continue; // Skip directories
+        }
+        
+        std::string fileName = findData.cFileName;
+        if (fileName.find('.') == std::string::npos) {
+            continue; // Skip files without extensions
+        }
+        
+        std::string extension = fileName.substr(fileName.find_last_of('.'));
+        std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+        
+        // Only include supported texture formats
+        if (extension == ".blp" || extension == ".png" || extension == ".bmp" || 
+            extension == ".dds" || extension == ".jpg" || extension == ".jpeg") {
+            m_commonTexturePaths.push_back(fileName);
+            LOG_DEBUG("TextureManager: Found texture file: " + fileName);
+        }
+        
+    } while (FindNextFileA(hFind, &findData));
+    
+    FindClose(hFind);
+    
+    // Sort alphabetically for better UI experience
+    std::sort(m_commonTexturePaths.begin(), m_commonTexturePaths.end());
+    
+    LOG_INFO("TextureManager: Found " + std::to_string(m_commonTexturePaths.size()) + " texture files in " + targetPath);
 }
 
 IDirect3DTexture9* TextureManager::GetTexture(const std::string& textureName) {
@@ -491,14 +538,132 @@ void TextureManager::PreloadTexture(const std::string& textureName) {
     GetTexture(textureName);
 }
 
-void TextureManager::ClearTextureCache() {
-    for (auto& pair : m_textureCache) {
-        if (pair.second) {
-            pair.second->Release();
-        }
+std::string TextureManager::GetSourceBlpsPath() {
+    // Get the path to the source core/blps folder
+    char modulePath[MAX_PATH];
+    HMODULE hModule = GetModuleHandle(L"WorldToScreenTesting.dll");
+    if (!hModule) {
+        hModule = GetModuleHandle(nullptr);
     }
-    m_textureCache.clear();
-    LOG_DEBUG("TextureManager: Texture cache cleared.");
+    
+    if (!GetModuleFileNameA(hModule, modulePath, MAX_PATH)) {
+        LOG_ERROR("TextureManager: Failed to get module path");
+        return "";
+    }
+    
+    std::string moduleDir(modulePath);
+    size_t lastSlash = moduleDir.find_last_of("\\/");
+    if (lastSlash != std::string::npos) {
+        moduleDir = moduleDir.substr(0, lastSlash);
+    }
+    
+    // Navigate up to project root and then to core/blps
+    // From build/bin/Debug -> go up 3 levels to project root, then core/blps
+    std::string projectRoot = moduleDir + "\\..\\..\\..";
+    std::string sourceBlpsPath = projectRoot + "\\core\\blps";
+    
+    // Normalize the path
+    char fullPath[MAX_PATH];
+    if (!GetFullPathNameA(sourceBlpsPath.c_str(), MAX_PATH, fullPath, nullptr)) {
+        LOG_ERROR("TextureManager: Failed to normalize source path: " + sourceBlpsPath);
+        return "";
+    }
+    
+    return std::string(fullPath);
+}
+
+std::string TextureManager::GetTargetBlpsPath() {
+    // Get current module directory and append blps
+    char modulePath[MAX_PATH];
+    HMODULE hModule = GetModuleHandle(L"WorldToScreenTesting.dll");
+    if (!hModule) {
+        hModule = GetModuleHandle(nullptr);
+    }
+    
+    if (!GetModuleFileNameA(hModule, modulePath, MAX_PATH)) {
+        LOG_ERROR("TextureManager: Failed to get module path for target");
+        return "";
+    }
+    
+    std::string moduleDir(modulePath);
+    size_t lastSlash = moduleDir.find_last_of("\\/");
+    if (lastSlash != std::string::npos) {
+        moduleDir = moduleDir.substr(0, lastSlash);
+    }
+    
+    return moduleDir + "\\blps";
+}
+
+bool TextureManager::HotReloadTexturesFromSource() {
+    std::string sourcePath = GetSourceBlpsPath();
+    std::string targetPath = GetTargetBlpsPath();
+    
+    LOG_INFO("TextureManager: Hot reload - Source: " + sourcePath);
+    LOG_INFO("TextureManager: Hot reload - Target: " + targetPath);
+    
+    // Create target directory if it doesn't exist
+    CreateDirectoryA(targetPath.c_str(), nullptr);
+    
+    // Find all files in source directory
+    WIN32_FIND_DATAA findData;
+    std::string searchPattern = sourcePath + "\\*.*";
+    HANDLE hFind = FindFirstFileA(searchPattern.c_str(), &findData);
+    
+    if (hFind == INVALID_HANDLE_VALUE) {
+        LOG_ERROR("TextureManager: Hot reload failed - Cannot access source directory: " + sourcePath);
+        return false;
+    }
+    
+    int copiedFiles = 0;
+    int skippedFiles = 0;
+    
+    do {
+        if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            continue; // Skip directories
+        }
+        
+        std::string fileName = findData.cFileName;
+        std::string sourceFile = sourcePath + "\\" + fileName;
+        std::string targetFile = targetPath + "\\" + fileName;
+        
+        // Check if file is a supported texture format
+        std::string extension = fileName.substr(fileName.find_last_of('.'));
+        std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+        
+        if (extension == ".blp" || extension == ".png" || extension == ".bmp" || 
+            extension == ".dds" || extension == ".jpg" || extension == ".jpeg") {
+            
+            // Copy file
+            if (CopyFileA(sourceFile.c_str(), targetFile.c_str(), FALSE)) {
+                LOG_DEBUG("TextureManager: Hot reload copied: " + fileName);
+                copiedFiles++;
+                
+                // Clear this texture from cache so it gets reloaded
+                auto it = m_textureCache.find(fileName);
+                if (it != m_textureCache.end()) {
+                    if (it->second) {
+                        it->second->Release();
+                    }
+                    m_textureCache.erase(it);
+                }
+            } else {
+                LOG_WARNING("TextureManager: Hot reload failed to copy: " + fileName);
+            }
+        } else {
+            skippedFiles++;
+        }
+        
+    } while (FindNextFileA(hFind, &findData));
+    
+    FindClose(hFind);
+    
+    LOG_INFO("TextureManager: Hot reload complete - Copied: " + std::to_string(copiedFiles) + 
+             ", Skipped: " + std::to_string(skippedFiles) + " files");
+    
+    // Update common texture paths to include newly found files
+    PopulateCommonTextures();
+    
+    return copiedFiles > 0;
 }
 
 int TextureManager::AddTextureAtPosition(const std::string& textureName, const D3DXVECTOR3& worldPos, 
@@ -542,6 +707,39 @@ void TextureManager::RemoveTexture(int id) {
 void TextureManager::ClearAllTextures() {
     m_renderTextures.clear();
     LOG_DEBUG("TextureManager: All render textures cleared");
+}
+
+bool TextureManager::UpdateTextureScale(int id, float newScale) {
+    for (auto& texture : m_renderTextures) {
+        if (texture.id == id) {
+            texture.scale = newScale;
+            LOG_DEBUG("TextureManager: Updated texture " + std::to_string(id) + " scale to " + std::to_string(newScale));
+            return true;
+        }
+    }
+    return false;
+}
+
+bool TextureManager::UpdateTexturePosition(int id, const D3DXVECTOR3& newPos) {
+    for (auto& texture : m_renderTextures) {
+        if (texture.id == id) {
+            texture.worldPos = newPos;
+            LOG_DEBUG("TextureManager: Updated texture " + std::to_string(id) + " position");
+            return true;
+        }
+    }
+    return false;
+}
+
+bool TextureManager::UpdateTextureColor(int id, D3DCOLOR newColor) {
+    for (auto& texture : m_renderTextures) {
+        if (texture.id == id) {
+            texture.color = newColor;
+            LOG_DEBUG("TextureManager: Updated texture " + std::to_string(id) + " color");
+            return true;
+        }
+    }
+    return false;
 }
 
 bool TextureManager::PassesSearchFilter(const std::string& textureName) const {
@@ -618,19 +816,35 @@ void TextureManager::Render() {
         D3DSURFACE_DESC desc;
         if (FAILED(texture.pD3DTexture->GetLevelDesc(0, &desc))) continue;
 
+        // Apply scaling to the texture dimensions
+        float scaledWidth = desc.Width * texture.scale;
+        float scaledHeight = desc.Height * texture.scale;
+
         RECT sourceRect = { 0, 0, (LONG)desc.Width, (LONG)desc.Height };
         
+        // Use a simpler approach: scale around the center point
+        D3DXMATRIX scaleMatrix;
+        D3DXMatrixScaling(&scaleMatrix, texture.scale, texture.scale, 1.0f);
+        m_pSprite->SetTransform(&scaleMatrix);
+        
+        // Calculate position to keep texture centered at the screen position
+        // When scaling, we need to adjust the position to account for the scale
         D3DXVECTOR3 position(
-            texture.screenPos.x - (desc.Width / 2.0f),
-            texture.screenPos.y - (desc.Height / 2.0f),
+            (texture.screenPos.x - (scaledWidth / 2.0f)) / texture.scale,
+            (texture.screenPos.y - (scaledHeight / 2.0f)) / texture.scale,
             0.0f
         );
 
         m_pSprite->Draw(texture.pD3DTexture, &sourceRect, nullptr, &position, texture.color);
 
+        // Reset transform for text rendering
+        D3DXMATRIX identity;
+        D3DXMatrixIdentity(&identity);
+        m_pSprite->SetTransform(&identity);
+
         if (m_settings.showTextureLabels && !texture.label.empty() && m_pRenderEngine) {
             D3DXVECTOR2 labelPos = texture.screenPos;
-            labelPos.y += (desc.Height / 2.0f) + 5;
+            labelPos.y += (scaledHeight / 2.0f) + 5; // Use scaled height for label positioning
             m_pRenderEngine->DrawText(texture.label, labelPos, 0xFFFFFFFF, 1.0f);
         }
     }

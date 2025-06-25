@@ -65,7 +65,7 @@ struct TextureSearchSettings {
         onlyShowInRange = true;
         maxRenderDistance = 100.0f;
         defaultTextureSize = 32.0f;
-        defaultTextureScale = 1.0f;
+        defaultTextureScale = 0.4f;
         billboardTextures = true;
         
         searchFilter = "";
@@ -120,10 +120,19 @@ public:
     void RemoveTexture(int id);
     void ClearAllTextures();
     
+    // Update texture properties
+    bool UpdateTextureScale(int id, float newScale);
+    bool UpdateTexturePosition(int id, const D3DXVECTOR3& newPos);
+    bool UpdateTextureColor(int id, D3DCOLOR newColor);
+    
     // Texture loading and caching
     IDirect3DTexture9* GetTexture(const std::string& texturePath);
     void PreloadTexture(const std::string& texturePath);
-    void ClearTextureCache();
+    
+    // Hot reload functionality
+    bool HotReloadTexturesFromSource();
+    std::string GetSourceBlpsPath();
+    std::string GetTargetBlpsPath();
     
     // Update and render
     void Update();
