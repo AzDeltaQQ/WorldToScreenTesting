@@ -5,6 +5,7 @@
 #include "types/types.h"
 #include "logs/Logger.h"
 #include "combat/CombatLogManager.h"
+#include "movement/MovementController.h"
 #include <Windows.h>
 #include <d3d9.h>
 #include <iostream>
@@ -245,6 +246,9 @@ HRESULT __stdcall HookedEndScene(IDirect3DDevice9* device) {
             
             // Process spell lookup queue (must be done in EndScene for thread safety)
             CombatLogManager::GetInstance().ProcessSpellLookupQueue();
+            
+            // Process movement commands (must be done in EndScene for thread safety)
+            MovementController::GetInstance().ProcessQueuedCommands();
 
             // 4. Finalize the ImGui frame and render its draw data.
             ImGui::EndFrame();

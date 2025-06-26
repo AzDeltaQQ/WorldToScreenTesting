@@ -55,6 +55,7 @@ set(SOURCES
     core/gui/tabs/DrawingTab.cpp
     core/gui/tabs/ObjectsTab.cpp
     core/gui/tabs/CombatLogTab.cpp
+    core/gui/tabs/MovementTab.cpp
     core/drawing/drawing.cpp
     core/drawing/components/WorldToScreenCore.cpp
     core/drawing/components/RenderEngine.cpp
@@ -66,6 +67,7 @@ set(SOURCES
     core/drawing/components/TextureManager.cpp
     core/combat/CombatLogManager.cpp
     core/combat/CombatLogAnalyzer.cpp
+    core/movement/MovementController.cpp
     core/logs/Logger.cpp
     core/types/types.cpp
     ${MINHOOK_SOURCES}
@@ -95,9 +97,11 @@ set(HEADERS
     core/gui/tabs/ObjectsTab.h
     core/gui/tabs/DrawingTab.h
     core/gui/tabs/CombatLogTab.h
+    core/gui/tabs/MovementTab.h
     core/combat/CombatLogEntry.h
     core/combat/CombatLogManager.h
     core/combat/CombatLogAnalyzer.h
+    core/movement/MovementController.h
 )
 
 # Create the DLL
@@ -123,6 +127,7 @@ target_include_directories(${PROJECT_NAME}
     ${CMAKE_CURRENT_SOURCE_DIR}/core/objects
     ${CMAKE_CURRENT_SOURCE_DIR}/core/gui
     ${CMAKE_CURRENT_SOURCE_DIR}/core/combat
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/movement
     ${CMAKE_CURRENT_SOURCE_DIR}/dependencies
     ${MINHOOK_DIR}/include
     ${JSON_DIR}/include

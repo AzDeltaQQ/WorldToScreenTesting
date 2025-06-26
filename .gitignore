@@ -2,6 +2,7 @@
 build/
 bin/
 obj/
+maps/
 
 # Visual Studio files
 *.vcxproj.user

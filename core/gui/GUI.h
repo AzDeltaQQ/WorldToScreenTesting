@@ -9,6 +9,7 @@ namespace GUI {
     class ObjectsTab;
     class DrawingTab;
     class CombatLogTab;
+    class MovementTab;
 
     // Main GUI manager class
     class GUIManager {
@@ -19,6 +20,7 @@ namespace GUI {
         std::unique_ptr<ObjectsTab> m_objectsTab;
         std::unique_ptr<DrawingTab> m_drawingTab;
         std::unique_ptr<CombatLogTab> m_combatLogTab;
+        std::unique_ptr<MovementTab> m_movementTab;
         
         bool m_statusOverlayForceEnabled; // Independent overlay state - ONLY controlled by Settings tab
         ObjectManager* m_objectManager;
@@ -51,6 +53,7 @@ namespace GUI {
         ObjectsTab* GetObjectsTab() const { return m_objectsTab.get(); }
         DrawingTab* GetDrawingTab() const { return m_drawingTab.get(); }
         CombatLogTab* GetCombatLogTab() const { return m_combatLogTab.get(); }
+        MovementTab* GetMovementTab() const { return m_movementTab.get(); }
     };
 
     // Convenience functions
