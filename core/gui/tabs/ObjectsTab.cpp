@@ -4,6 +4,7 @@
 #include "../../objects/WowUnit.h"
 #include "../../objects/WowGameObject.h"
 #include "../../objects/WowPlayer.h"
+#include "../../logs/Logger.h"
 #include <imgui.h>
 #include <algorithm>
 #include <sstream>
@@ -345,9 +346,7 @@ float ObjectsTab::CalculateDistanceToPlayer(std::shared_ptr<WowObject> obj) cons
     
     auto localPlayer = m_objectManager->GetLocalPlayer();
     if (!localPlayer) {
-        // If no local player, return a reasonable distance so objects still show
-        // This allows viewing objects even when local player detection fails
-        return 50.0f; // Changed from 999.0f to 50.0f
+        return 999.0f; // No fallback - if no local player, don't show objects
     }
     
     auto playerPos = localPlayer->GetPosition();
@@ -355,16 +354,12 @@ float ObjectsTab::CalculateDistanceToPlayer(std::shared_ptr<WowObject> obj) cons
     
     // Check for zero positions which indicate invalid data
     if (playerPos.IsZero() || objPos.IsZero()) {
-        return 50.0f; // Return reasonable distance for invalid positions
+        return 999.0f; // No fallback - if positions are invalid, don't show
     }
     
     float distance = playerPos.Distance(objPos);
     
-    // Clamp unreasonable distances
-    if (distance > 1000.0f || distance < 0.0f) {
-        return 50.0f;
-    }
-    
+    // Return actual distance - no clamping
     return distance;
 }
 

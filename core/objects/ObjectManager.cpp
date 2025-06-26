@@ -5,6 +5,7 @@
 #include "WowGameObject.h"
 #include "../memory/memory.h"
 #include "../types/types.h"
+#include "../types.h"
 #include "../logs/Logger.h"
 #include <cmath>
 #include <memory>
@@ -181,15 +182,11 @@ void ObjectManager::ProcessFoundObject(WGUID guid, void* objectPtr) {
             m_objectCache[guid] = obj;
             
             // Check if this is the local player
-            if (objType == OBJECT_PLAYER) {
+            if (objType == OBJECT_PLAYER && m_localPlayerGuid.IsValid()) {
                 auto player = std::dynamic_pointer_cast<WowPlayer>(obj);
-                if (player) {
-                    // In CryoSource, local player is determined differently
-                    // For now, we'll consider any player as potential local player
-                    if (!m_localPlayer) {
-                        m_localPlayer = player;
-                        m_localPlayerGuid = guid;
-                    }
+                if (player && guid.ToUint64() == m_localPlayerGuid.ToUint64()) {
+                    // This is the actual local player based on GUID match
+                    m_localPlayer = player;
                 }
             }
         }
@@ -250,13 +247,21 @@ void ObjectManager::Update() {
 }
 
 void ObjectManager::RefreshLocalPlayerCache() {
-    // Try to get local player GUID using CryoSource method
+    // Use WoW's native getActivePlayerObject function (same as drawing system)
     try {
-        uintptr_t clientConnection = Memory::Read<uintptr_t>(GameOffsets::STATIC_CLIENT_CONNECTION);
-        if (clientConnection != 0) {
-            uint64_t guid64 = Memory::Read<uint64_t>(clientConnection + GameOffsets::LOCAL_GUID_OFFSET);
-            if (guid64 != 0) {
-                m_localPlayerGuid = WGUID(guid64);
+        // Get the player object using WoW's own function
+        GetActivePlayerObjectFn getActivePlayerObject = reinterpret_cast<GetActivePlayerObjectFn>(GET_ACTIVE_PLAYER_OBJECT_ADDR);
+        
+        void* pPlayerObject = getActivePlayerObject();
+        if (pPlayerObject) {
+            // Read the GUID from the player object
+            uintptr_t playerPtr = reinterpret_cast<uintptr_t>(pPlayerObject);
+            uintptr_t descriptorPtr = Memory::Read<uintptr_t>(playerPtr + 0x8);
+            if (descriptorPtr) {
+                uint64_t guid64 = Memory::Read<uint64_t>(descriptorPtr + 0x0); // OBJECT_FIELD_GUID
+                if (guid64 != 0) {
+                    m_localPlayerGuid = WGUID(guid64);
+                }
             }
         }
     } catch (...) {
