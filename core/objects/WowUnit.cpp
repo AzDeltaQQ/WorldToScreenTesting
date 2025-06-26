@@ -4,6 +4,7 @@
 #include "../types/types.h"
 #include <sstream>
 #include <iomanip>
+#include "../logs/logger.h" 
 
 // Unit field offsets (corrected for our Cryotherapist project)
 namespace {
@@ -385,4 +386,80 @@ bool WowUnit::IsFriendly() const {
     // In a full implementation, this would check faction relationships
     // For now, assume non-players are hostile unless proven otherwise
     return false; // Default to hostile for enemy targeting
+}
+
+float WowUnit::GetHeight() const {
+    // Use simple default height for head position calculation
+    return 2.0f; // Good default for humanoid head position
+}
+
+float WowUnit::GetScale() const {
+    if (!m_objectPtr) return 1.0f;
+    
+    try {
+        // VTable index 15 for GetScale (from provided vtable info)
+        typedef float(__thiscall* GetScaleFn)(void* pThis);
+        
+        // Get vtable from object
+        uintptr_t vtablePtr = Memory::Read<uintptr_t>(m_objectPtr);
+        if (!vtablePtr || !Memory::IsValidAddress(vtablePtr)) {
+            std::stringstream ss;
+            ss << "GetScale: Invalid vtable pointer for unit GUID 0x" << std::hex << GetGUID().ToUint64();
+            LOG_DEBUG(ss.str());
+            return 1.0f;
+        }
+        
+        // Get GetScale function from vtable at index 15
+        uintptr_t fnAddress = Memory::Read<uintptr_t>(vtablePtr + (15 * sizeof(void*)));
+        if (!fnAddress || !Memory::IsValidAddress(fnAddress)) {
+            std::stringstream ss;
+            ss << "GetScale: Invalid function pointer for unit GUID 0x" << std::hex << GetGUID().ToUint64();
+            LOG_DEBUG(ss.str());
+            return 1.0f;
+        }
+        
+        GetScaleFn fnGetScale = reinterpret_cast<GetScaleFn>(fnAddress);
+        
+        // Call the function with proper calling convention
+        float scale = fnGetScale(reinterpret_cast<void*>(m_objectPtr));
+        
+        // Validate the result
+        if (scale <= 0.0f || scale > 10.0f || !std::isfinite(scale)) {
+            std::stringstream ss;
+            ss << "GetScale: Invalid scale value " << scale << " for unit GUID 0x" << std::hex << GetGUID().ToUint64();
+            LOG_WARNING(ss.str());
+            return 1.0f;
+        }
+        
+        // Scale retrieved successfully from vtable index 15
+        return scale;
+        
+    } catch (const std::exception& e) {
+        std::stringstream ss;
+        ss << "GetScale: Exception for unit GUID 0x" << std::hex << GetGUID().ToUint64() << ": " << e.what();
+        LOG_WARNING(ss.str());
+        return 1.0f;
+    } catch (...) {
+        std::stringstream ss;
+        ss << "GetScale: Unknown exception for unit GUID 0x" << std::hex << GetGUID().ToUint64();
+        LOG_WARNING(ss.str());
+        return 1.0f;
+    }
+}
+
+float WowUnit::GetVisualHeight() const {
+    float baseHeight = GetHeight();
+    float scale = GetScale();
+    float visualHeight = baseHeight * scale;
+    
+    return visualHeight;
+}
+
+Vector3 WowUnit::GetHeadPosition() const {
+    Vector3 basePos = GetPosition();
+    float visualHeight = GetVisualHeight();
+    
+    Vector3 headPos(basePos.x, basePos.y, basePos.z + visualHeight);
+    
+    return headPos;
 } 

@@ -106,6 +106,15 @@ public:
     bool IsMoving() const;
     bool IsLocalPlayer() const;
     
+    // Height and scale methods for head position calculation
+    // Note: Based on vtable info provided:
+    // CGUnit vtable: 0-83, GetScale is at index 15
+    // Height may need different approach than vtable call
+    float GetHeight() const;
+    float GetScale() const;
+    float GetVisualHeight() const; // baseHeight * scale
+    Vector3 GetHeadPosition() const; // position + visual height
+    
     // Casting/channeling info (added to match Rotations)
     uint32_t GetCastingSpellId() const { return m_cachedCastingSpellId; }
     uint32_t GetChannelSpellId() const { return m_cachedChannelSpellId; }

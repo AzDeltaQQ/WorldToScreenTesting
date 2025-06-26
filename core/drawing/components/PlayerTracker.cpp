@@ -4,6 +4,7 @@
 #include "../../memory/memory.h"
 #include "../../types/types.h"
 #include <cmath>
+#include <sstream>
 
 PlayerTracker::PlayerTracker() 
     : m_pWorldToScreen(nullptr), m_pLineManager(nullptr), m_pMarkerManager(nullptr), m_targetLineId(-1) {
@@ -124,11 +125,6 @@ void PlayerTracker::UpdatePlayerToTargetLine() {
     static WGUID lastTargetGuid;
     static bool wasValid = false;
     if (tgtGuid.ToUint64() != lastTargetGuid.ToUint64() || hasValidTarget != wasValid) {
-        if (hasValidTarget) {
-            LOG_DEBUG("Target acquired: GUID 0x" + std::to_string(tgtGuid.ToUint64()));
-        } else {
-            LOG_DEBUG("Target cleared: GUID was 0x" + std::to_string(tgtGuid.ToUint64()));
-        }
         lastTargetGuid = tgtGuid;
         wasValid = hasValidTarget;
     }
@@ -139,7 +135,7 @@ void PlayerTracker::UpdatePlayerToTargetLine() {
             // Get player position using C3Vector (correct coordinate system)
             C3Vector playerPosC3;
             if (m_pWorldToScreen->GetPlayerPositionSafe(playerPosC3)) {
-                // Get target position using Vector3 (now same coordinate system) 
+                // Use feet position for player to target line
                 Vector3 tgtPosV = targetObj->GetPosition();
                 
                 // Convert to D3DXVECTOR3: Both are now in the same coordinate system
@@ -161,7 +157,6 @@ void PlayerTracker::UpdatePlayerToTargetLine() {
             if (m_targetLineId != -1) { 
                 m_pLineManager->RemoveLine(m_targetLineId); 
                 m_targetLineId = -1; 
-                LOG_DEBUG("Target object not found, clearing PlayerToTarget line");
             }
         }
     } else {
@@ -169,7 +164,6 @@ void PlayerTracker::UpdatePlayerToTargetLine() {
         if (m_targetLineId != -1) { 
             m_pLineManager->RemoveLine(m_targetLineId); 
             m_targetLineId = -1; 
-            LOG_DEBUG("No valid target, clearing PlayerToTarget line");
         }
     }
 }

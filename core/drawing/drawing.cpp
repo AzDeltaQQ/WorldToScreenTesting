@@ -283,28 +283,33 @@ void WorldToScreenManager::Update() {
                     if (tgtGuid.IsValid()) {
                         auto targetObj = objMgr->GetObjectByGUID(tgtGuid);
                         if (targetObj) {
-                            // Use EXACT same approach as PlayerTracker
-                            // Get target position using Vector3 (same as PlayerTracker)
-                            Vector3 tgtPosV = targetObj->GetPosition();
+                            // Get target position - use head position for units, feet for others
+                            Vector3 tgtPosV;
+                            auto targetUnit = std::dynamic_pointer_cast<WowUnit>(targetObj);
+                            if (targetUnit) {
+                                // Use head position for units for head-to-head LoS
+                                tgtPosV = targetUnit->GetHeadPosition();
+                            } else {
+                                // Use feet position for non-units (GameObjects, etc.)
+                                tgtPosV = targetObj->GetPosition();
+                            }
                             
-                            // Convert to D3DXVECTOR3: Both are now in the same coordinate system (same as PlayerTracker)
+                            // Convert to D3DXVECTOR3: Both are now in the same coordinate system
                             D3DXVECTOR3 pPos(playerPosC3.x, playerPosC3.y, playerPosC3.z);
                             D3DXVECTOR3 tPos(tgtPosV.x, tgtPosV.y, tgtPosV.z);
                             
-                            // Perform LoS check using Vector3 for the LoS system
+                            // Perform LoS check using Vector3 for the LoS system (head to head for units)
+                            Vector3 playerHeadPos(playerPosC3.x, playerPosC3.y, playerPosC3.z + 2.5f); // Player eye level
                             Vector3 targetPosForLoS(tgtPosV.x, tgtPosV.y, tgtPosV.z);
-                            auto losResult = m_losManager.CheckLineOfSight(playerPos, targetPosForLoS, false);
+                            auto losResult = m_losManager.CheckLineOfSight(playerHeadPos, targetPosForLoS, false);
                             
                             if (losResult.isValid) {
-                                // Create line using same coordinates as PlayerTracker, but raise start point to eye level
+                                // Create line from player head to target head (for units) or target feet (for objects)
                                 D3DXVECTOR3 start = pPos;
-                                start.z += 2.5f;  // Raise LoS line start to eye level (2.5 units above feet)
-                                D3DXVECTOR3 end;
+                                start.z += 2.5f;  // Player eye level (2.5 units above feet)
+                                D3DXVECTOR3 end = tPos;  // Target position (already head for units, feet for objects)
                                 
                                 D3DCOLOR lineColor;
-                                
-                                // Both blocked and clear lines go to the target, only color changes
-                                end = tPos;  // Always go to target position (same as PlayerTracker)
                                 
                                 auto& settings = m_losManager.GetSettings();
                                 if (losResult.isBlocked) {

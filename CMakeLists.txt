@@ -163,7 +163,7 @@ endif()
 
 # Set 32-bit specific compiler flags
 if(MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE /arch:IA32)
+    target_compile_options(${PROJECT_NAME} PRIVATE /arch:IA32 /FS)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         LINK_FLAGS "/MACHINE:X86 /SAFESEH:NO"
     )
