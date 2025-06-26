@@ -1057,7 +1057,17 @@ std::string CombatLogTab::FormatLogEntry(const CombatLogEntry& entry) {
         case CombatEventType::SPELL_DAMAGE:
             ss << entry.sourceName << " -> " << entry.targetName << ": " 
                << entry.amount << " " << GetSchoolMaskName(entry.spellSchoolMask) << " damage";
-            if (entry.spellId > 0) ss << " (" << entry.spellName << ")";
+            if (entry.spellId > 0) {
+                // Always try to get the latest spell name from the manager
+                std::string currentSpellName = m_combatLogManager->GetSpellNameById(entry.spellId);
+                if (currentSpellName.find("Spell ") != 0) {
+                    // We have a real spell name (not a fallback)
+                    ss << " (" << currentSpellName << ")";
+                } else {
+                    // Still using fallback, show spell ID
+                    ss << " (Spell " << entry.spellId << ")";
+                }
+            }
             
             // Add mitigation info
             if (entry.absorbed > 0) ss << " [" << entry.absorbed << " absorbed]";
@@ -1073,7 +1083,17 @@ std::string CombatLogTab::FormatLogEntry(const CombatLogEntry& entry) {
                 float efficiency = (static_cast<float>(entry.amount) / static_cast<float>(totalHeal)) * 100.0f;
                 ss << " (+" << entry.overAmount << " overheal, " << std::fixed << std::setprecision(1) << efficiency << "% efficiency)";
             }
-            if (entry.spellId > 0) ss << " (" << entry.spellName << ")";
+            if (entry.spellId > 0) {
+                // Always try to get the latest spell name from the manager
+                std::string currentSpellName = m_combatLogManager->GetSpellNameById(entry.spellId);
+                if (currentSpellName.find("Spell ") != 0) {
+                    // We have a real spell name (not a fallback)
+                    ss << " (" << currentSpellName << ")";
+                } else {
+                    // Still using fallback, show spell ID
+                    ss << " (Spell " << entry.spellId << ")";
+                }
+            }
             break;
             
         case CombatEventType::MELEE_DAMAGE:
@@ -1102,10 +1122,16 @@ std::string CombatLogTab::FormatLogEntry(const CombatLogEntry& entry) {
             else if (entry.eventType == CombatEventType::SPELL_CAST_SUCCESS) ss << " casts";
             else ss << " failed to cast";
             
-            if (entry.spellId > 0 && !entry.spellName.empty()) {
-                ss << " " << entry.spellName;
-            } else if (entry.spellId > 0) {
-                ss << " (Spell ID: " << entry.spellId << ")";
+            if (entry.spellId > 0) {
+                // Always try to get the latest spell name from the manager
+                std::string currentSpellName = m_combatLogManager->GetSpellNameById(entry.spellId);
+                if (currentSpellName.find("Spell ") != 0) {
+                    // We have a real spell name (not a fallback)
+                    ss << " " << currentSpellName;
+                } else {
+                    // Still using fallback, show spell ID
+                    ss << " (Spell ID: " << entry.spellId << ")";
+                }
             } else {
                 ss << " something";
             }

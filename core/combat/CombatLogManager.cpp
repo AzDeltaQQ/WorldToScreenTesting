@@ -1714,7 +1714,6 @@ SpellInfo CombatLogManager::GetSpellInfoById(uint32_t spellId) {
         std::lock_guard<std::mutex> lock(m_spellLookupMutex);
         auto it = m_spellCache.find(spellId);
         if (it != m_spellCache.end()) {
-            LOG_DEBUG("GetSpellInfoById: Found cached spell ID " + std::to_string(spellId) + ": '" + it->second.name + "'");
             return it->second;
         }
     }
@@ -1729,26 +1728,20 @@ SpellInfo CombatLogManager::GetSpellInfoById(uint32_t spellId) {
         m_spellLookupQueue.push({spellId, promise});
     }
     
-    LOG_DEBUG("GetSpellInfoById: Queued spell lookup for ID " + std::to_string(spellId));
-    
-    // Wait for the result with timeout
-    auto status = future.wait_for(std::chrono::milliseconds(100));
+    // Check if result is immediately available (non-blocking)
+    auto status = future.wait_for(std::chrono::milliseconds(0));
     if (status == std::future_status::ready) {
         SpellInfo result = future.get();
-        LOG_DEBUG("GetSpellInfoById: Got result for spell ID " + std::to_string(spellId) + ": '" + result.name + "'");
         return result;
     } else {
-        LOG_WARNING("GetSpellInfoById: Timeout waiting for spell lookup " + std::to_string(spellId));
+        // Return fallback immediately - spell name will be resolved on next frame
         return {"Spell " + std::to_string(spellId), 0, false};
     }
 }
 
 SpellInfo CombatLogManager::GetSpellInfoByIdInternal(uint32_t spellId) {
-    LOG_DEBUG("GetSpellInfoByIdInternal: Looking up spell ID " + std::to_string(spellId));
-    
     // Validate function address first
     if (!Memory::IsValidAddress(WowSpellAddresses::FETCH_LOCALIZED_ROW)) {
-        LOG_WARNING("GetSpellInfoByIdInternal: FETCH_LOCALIZED_ROW address is invalid");
         return {"Invalid Function Address", 0, false};
     }
     
@@ -1759,30 +1752,10 @@ SpellInfo CombatLogManager::GetSpellInfoByIdInternal(uint32_t spellId) {
     // Get the Spell DBC context object
     // Based on disassembly analysis, 0x00AD49D0 is the direct context structure
     if (!Memory::IsValidAddress(WowSpellAddresses::SPELL_DB_CONTEXT_POINTER)) {
-        LOG_WARNING("GetSpellInfoByIdInternal: Spell DBC context address is invalid");
         return {"Invalid Context Address", 0, false};
     }
     
     void* pSpellContext = reinterpret_cast<void*>(WowSpellAddresses::SPELL_DB_CONTEXT_POINTER);
-    
-    LOG_DEBUG("GetSpellInfoByIdInternal: Spell context at 0x" + std::to_string(reinterpret_cast<uintptr_t>(pSpellContext)));
-    
-    // Debug: Check the bounds values in the context (based on disassembly analysis)
-    uint32_t* contextPtr = reinterpret_cast<uint32_t*>(pSpellContext);
-    if (Memory::IsValidAddress(reinterpret_cast<uintptr_t>(contextPtr + 3))) { // +0x0C = index 3
-        uint32_t maxSpellId = contextPtr[3]; // context+0x0C
-        LOG_DEBUG("GetSpellInfoByIdInternal: Max Spell ID from context+0x0C: " + std::to_string(maxSpellId));
-    }
-    if (Memory::IsValidAddress(reinterpret_cast<uintptr_t>(contextPtr + 4))) { // +0x10 = index 4
-        uint32_t minSpellId = contextPtr[4]; // context+0x10
-        LOG_DEBUG("GetSpellInfoByIdInternal: Min Spell ID from context+0x10: " + std::to_string(minSpellId));
-    }
-    
-    // Call the function using inline assembly to ensure correct __thiscall convention
-    LOG_DEBUG("GetSpellInfoByIdInternal: Calling fetchLocalizedRow with inline assembly");
-    LOG_DEBUG("  - Context: 0x" + std::to_string(reinterpret_cast<uintptr_t>(pSpellContext)));
-    LOG_DEBUG("  - SpellID: " + std::to_string(spellId));
-    LOG_DEBUG("  - Buffer: 0x" + std::to_string(reinterpret_cast<uintptr_t>(resultBuffer)));
     
     int success = 0;
     
@@ -1801,10 +1774,7 @@ SpellInfo CombatLogManager::GetSpellInfoByIdInternal(uint32_t spellId) {
         mov success, eax
     }
     
-    LOG_DEBUG("GetSpellInfoByIdInternal: fetchLocalizedRow returned " + std::to_string(success));
-    
     if (!success) {
-        LOG_DEBUG("GetSpellInfoByIdInternal: Record not found for spell ID " + std::to_string(spellId));
         return {"Record Not Found", 0, false};
     }
     
@@ -1817,28 +1787,21 @@ SpellInfo CombatLogManager::GetSpellInfoByIdInternal(uint32_t spellId) {
     // - var_A4 corresponds to buffer + 0x220
     const char* spellNamePtr = *reinterpret_cast<const char**>(resultBuffer + 0x220);
     
-    LOG_DEBUG("GetSpellInfoByIdInternal: Spell name pointer at +0x220: 0x" + 
-              std::to_string(reinterpret_cast<uintptr_t>(spellNamePtr)));
-    
     if (spellNamePtr && Memory::IsValidAddress(reinterpret_cast<uintptr_t>(spellNamePtr))) {
         // Validate the string pointer and read the name
         if (*spellNamePtr) {
             outInfo.name = Memory::ReadString(reinterpret_cast<uintptr_t>(spellNamePtr));
-            LOG_DEBUG("GetSpellInfoByIdInternal: Found spell name: '" + outInfo.name + "'");
         } else {
             outInfo.name = "Empty Spell Name";
-            LOG_DEBUG("GetSpellInfoByIdInternal: Spell name pointer is empty");
         }
     } else {
         outInfo.name = "Invalid Spell Name Pointer";
-        LOG_DEBUG("GetSpellInfoByIdInternal: Invalid spell name pointer");
     }
     
     // Read the school mask from offset 0x284 (based on disassembly)
     // From WoW's PushCombatLogToFrameScript at 0x74E438: mov ecx, [ebp+var_40]
     // var_40 corresponds to buffer + 0x284
     outInfo.schoolMask = *reinterpret_cast<uint32_t*>(resultBuffer + 0x284);
-    LOG_DEBUG("GetSpellInfoByIdInternal: School mask at +0x284: 0x" + std::to_string(outInfo.schoolMask));
     
     return outInfo;
 }
@@ -1851,14 +1814,10 @@ void CombatLogManager::ProcessSpellLookupQueue() {
         return;
     }
     
-    LOG_DEBUG("ProcessSpellLookupQueue: Processing " + std::to_string(m_spellLookupQueue.size()) + " spell lookup requests");
-    
     // Process all queued spell lookups
     while (!m_spellLookupQueue.empty()) {
         auto request = m_spellLookupQueue.front();
         m_spellLookupQueue.pop();
-        
-        LOG_DEBUG("ProcessSpellLookupQueue: Processing spell ID " + std::to_string(request.spellId));
         
         try {
             // Perform the actual lookup (safe in EndScene)
@@ -1867,9 +1826,6 @@ void CombatLogManager::ProcessSpellLookupQueue() {
             // Cache successful lookups
             if (result.success) {
                 m_spellCache[request.spellId] = result;
-                LOG_DEBUG("ProcessSpellLookupQueue: Successfully cached spell " + std::to_string(request.spellId) + ": '" + result.name + "'");
-            } else {
-                LOG_DEBUG("ProcessSpellLookupQueue: Failed to lookup spell " + std::to_string(request.spellId) + ": " + result.name);
             }
             
             // Fulfill the promise
