@@ -29,10 +29,44 @@ namespace Memory {
         }
     }
 
+    bool ReadBytes(uintptr_t address, void* buffer, size_t size) {
+        if (address == 0 || buffer == nullptr || size == 0) {
+            return false;
+        }
+        
+        try {
+            memcpy(buffer, reinterpret_cast<const void*>(address), size);
+            return true;
+        }
+        catch (...) {
+            return false;
+        }
+    }
+
     bool IsValidAddress(uintptr_t address) {
         if (address == 0) return false;
         
-        // Basic check - try to read a byte
+        // Check if address is in a reasonable range (minimum check only)
+        if (address < 0x10000) {
+            return false;
+        }
+        
+        // Use VirtualQuery to check if memory is accessible
+        MEMORY_BASIC_INFORMATION mbi;
+        if (VirtualQuery(reinterpret_cast<LPCVOID>(address), &mbi, sizeof(mbi)) == 0) {
+            return false;
+        }
+        
+        // Check if memory is committed and readable
+        if (mbi.State != MEM_COMMIT) {
+            return false;
+        }
+        
+        if (!(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE))) {
+            return false;
+        }
+        
+        // Additional check - try to read a byte
         try {
             volatile uint8_t test = *reinterpret_cast<uint8_t*>(address);
             (void)test; // Suppress unused variable warning

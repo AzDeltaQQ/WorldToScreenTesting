@@ -4,6 +4,7 @@
 #include "gui/GUI.h"
 #include "types/types.h"
 #include "logs/Logger.h"
+#include "combat/CombatLogManager.h"
 #include <Windows.h>
 #include <d3d9.h>
 #include <iostream>
@@ -241,6 +242,14 @@ HRESULT __stdcall HookedEndScene(IDirect3DDevice9* device) {
             
             // Update WorldToScreen system every frame for smooth dynamic lines
             g_WorldToScreenManager.Update();
+            
+            // Process spell lookup queue (must be done in EndScene for thread safety)
+            static int spell_queue_counter = 0;
+            spell_queue_counter++;
+            if (spell_queue_counter % 300 == 0) { // Log every 5 seconds at 60fps
+                LOG_DEBUG("EndScene: Processing spell lookup queue (call #" + std::to_string(spell_queue_counter) + ")");
+            }
+            CombatLogManager::GetInstance().ProcessSpellLookupQueue();
 
             // 4. Finalize the ImGui frame and render its draw data.
             ImGui::EndFrame();

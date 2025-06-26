@@ -59,6 +59,9 @@ namespace Memory {
     // Read string (null-terminated)
     std::string ReadString(uintptr_t address, size_t maxLength = 256);
 
+    // Read raw bytes from memory
+    bool ReadBytes(uintptr_t address, void* buffer, size_t size);
+
     // Check if address is valid/readable
     bool IsValidAddress(uintptr_t address);
 

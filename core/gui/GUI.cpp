@@ -1,6 +1,7 @@
 #include "GUI.h"
 #include "tabs/ObjectsTab.h"
 #include "tabs/DrawingTab.h"
+#include "tabs/CombatLogTab.h"
 #include "../objects/ObjectManager.h"
 #include <imgui.h>
 #include <memory>
@@ -18,6 +19,7 @@ GUIManager::GUIManager()
     // Initialize tabs
     m_objectsTab = std::make_unique<ObjectsTab>();
     m_drawingTab = std::make_unique<DrawingTab>();
+    m_combatLogTab = std::make_unique<CombatLogTab>();
 }
 
 GUIManager::~GUIManager() = default;
@@ -47,6 +49,9 @@ void GUIManager::SetObjectManager(ObjectManager* objManager) {
     if (m_drawingTab) {
         m_drawingTab->SetObjectManager(objManager);
     }
+    if (m_combatLogTab) {
+        m_combatLogTab->SetObjectManager(objManager);
+    }
 }
 
 void GUIManager::Update() {
@@ -62,6 +67,9 @@ void GUIManager::Update() {
     }
     if (m_drawingTab) {
         m_drawingTab->Update(deltaTime);
+    }
+    if (m_combatLogTab) {
+        m_combatLogTab->Update(deltaTime);
     }
 }
 
@@ -174,6 +182,14 @@ void GUIManager::Render(bool* p_open) {
             if (ImGui::BeginTabItem("Drawing")) {
                 if (m_drawingTab) {
                     m_drawingTab->Render();
+                }
+                ImGui::EndTabItem();
+            }
+            
+            // Combat Log Tab
+            if (ImGui::BeginTabItem("Combat Log")) {
+                if (m_combatLogTab) {
+                    m_combatLogTab->Render();
                 }
                 ImGui::EndTabItem();
             }
