@@ -12,7 +12,7 @@
 #include <iomanip>
 #include <cstring>
 #include <unordered_map>
-#include "../../types.h"
+#include "../../types/types.h"
 
 namespace GUI {
 

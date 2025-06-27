@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../types.h"
+#include "../../types/types.h"
 #include "WorldToScreenCore.h"
 #include "LineManager.h"
 #include "MarkerManager.h"

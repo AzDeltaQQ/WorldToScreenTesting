@@ -29,6 +29,28 @@ set(MINHOOK_SOURCES
 # Add nlohmann/json (header-only library)
 set(JSON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/json-develop)
 
+# Add Recast Navigation
+set(RECAST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/recastnavigation)
+set(RECAST_SOURCES
+    ${RECAST_DIR}/Detour/Source/DetourAlloc.cpp
+    ${RECAST_DIR}/Detour/Source/DetourCommon.cpp
+    ${RECAST_DIR}/Detour/Source/DetourNavMesh.cpp
+    ${RECAST_DIR}/Detour/Source/DetourNavMeshBuilder.cpp
+    ${RECAST_DIR}/Detour/Source/DetourNavMeshQuery.cpp
+    ${RECAST_DIR}/Detour/Source/DetourNode.cpp
+    ${RECAST_DIR}/Recast/Source/Recast.cpp
+    ${RECAST_DIR}/Recast/Source/RecastAlloc.cpp
+    ${RECAST_DIR}/Recast/Source/RecastArea.cpp
+    ${RECAST_DIR}/Recast/Source/RecastAssert.cpp
+    ${RECAST_DIR}/Recast/Source/RecastContour.cpp
+    ${RECAST_DIR}/Recast/Source/RecastFilter.cpp
+    ${RECAST_DIR}/Recast/Source/RecastLayers.cpp
+    ${RECAST_DIR}/Recast/Source/RecastMesh.cpp
+    ${RECAST_DIR}/Recast/Source/RecastMeshDetail.cpp
+    ${RECAST_DIR}/Recast/Source/RecastRasterization.cpp
+    ${RECAST_DIR}/Recast/Source/RecastRegion.cpp
+)
+
 # Add ImGui
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/ImGui)
 set(IMGUI_SOURCES
@@ -68,15 +90,20 @@ set(SOURCES
     core/combat/CombatLogManager.cpp
     core/combat/CombatLogAnalyzer.cpp
     core/movement/MovementController.cpp
+    core/navigation/NavigationManager.cpp
+    core/navigation/VMapManager.cpp
+    core/gui/tabs/NavigationTab.cpp
     core/logs/Logger.cpp
     core/types/types.cpp
     ${MINHOOK_SOURCES}
     ${IMGUI_SOURCES}
+    ${RECAST_SOURCES}
 )
+
+# TrinityCore VMap integration removed - using simplified VMap implementation
 
 set(HEADERS
     core/hook.h
-    core/types.h
     core/drawing/drawing.h
     core/drawing/components/WorldToScreenCore.h
     core/drawing/components/RenderEngine.h
@@ -98,6 +125,10 @@ set(HEADERS
     core/gui/tabs/DrawingTab.h
     core/gui/tabs/CombatLogTab.h
     core/gui/tabs/MovementTab.h
+    core/gui/tabs/NavigationTab.h
+    core/navigation/NavigationManager.h
+    core/navigation/NavigationTypes.h
+    core/navigation/VMapManager.h
     core/combat/CombatLogEntry.h
     core/combat/CombatLogManager.h
     core/combat/CombatLogAnalyzer.h
@@ -128,7 +159,11 @@ target_include_directories(${PROJECT_NAME}
     ${CMAKE_CURRENT_SOURCE_DIR}/core/gui
     ${CMAKE_CURRENT_SOURCE_DIR}/core/combat
     ${CMAKE_CURRENT_SOURCE_DIR}/core/movement
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/navigation
     ${CMAKE_CURRENT_SOURCE_DIR}/dependencies
+    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/recastnavigation/Detour/Include
+    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/recastnavigation/DetourCrowd/Include
+    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/recastnavigation/Recast/Include
     ${MINHOOK_DIR}/include
     ${JSON_DIR}/include
     ${IMGUI_DIR}
@@ -159,6 +194,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     NOMINMAX
     WIN32
     _WIN32
+    DT_POLYREF64
 )
 
 # Force 32-bit compilation flags

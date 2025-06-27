@@ -90,14 +90,14 @@ bool WorldToScreenCore::WorldToScreen(const D3DXVECTOR3& worldPos, D3DXVECTOR2& 
         
         // Read camera position
         D3DXVECTOR3 cameraPos(pCamera->position[0], pCamera->position[1], pCamera->position[2]);
-        
-        // Calculate relative position (world position relative to camera)
+
+        // Calculate position relative to camera
         D3DXVECTOR3 relativePos = worldPos - cameraPos;
-        
+
         // Use WoW's view-projection matrix from WorldFrame+0x340
         D3DXMATRIX* pViewProjMatrix = reinterpret_cast<D3DXMATRIX*>(&pWorldFrame->viewProjectionMatrix[0]);
-        
-        // Transform the relative position using WoW's matrix
+
+        // Transform the relative position using the matrix
         D3DXVECTOR4 clipSpacePos;
         D3DXVECTOR3 homogeneousInput(relativePos.x, relativePos.y, relativePos.z);
         D3DXVec3Transform(&clipSpacePos, &homogeneousInput, pViewProjMatrix);
@@ -109,9 +109,7 @@ bool WorldToScreenCore::WorldToScreen(const D3DXVECTOR3& worldPos, D3DXVECTOR2& 
         // Check for valid W component (avoid division by zero)
         if (clipSpacePos.w <= 0.0001f) {
             static int failCount4 = 0;
-            if (++failCount4 % 600 == 0) {
-                LOG_DEBUG("WorldToScreen: Point behind camera (w=" + std::to_string(clipSpacePos.w) + ")");
-            }
+            ++failCount4; // keep variable referenced; debug output suppressed
             behindCamera = true;
             // Use a small positive value to avoid division by zero
             clipSpacePos.w = 0.001f;
@@ -125,9 +123,7 @@ bool WorldToScreenCore::WorldToScreen(const D3DXVECTOR3& worldPos, D3DXVECTOR2& 
         // Check depth bounds (NDC Z should be between 0 and 1)
         if (ndcZ < 0.0f || ndcZ > 1.0f) {
             static int failCount5 = 0;
-            if (++failCount5 % 600 == 0) {
-                LOG_DEBUG("WorldToScreen: Point outside depth bounds (z=" + std::to_string(ndcZ) + ")");
-            }
+            ++failCount5; // keep variable referenced; debug output suppressed
             outsideDepth = true;
         }
         

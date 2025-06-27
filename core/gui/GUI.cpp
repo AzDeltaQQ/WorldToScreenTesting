@@ -3,6 +3,7 @@
 #include "tabs/DrawingTab.h"
 #include "tabs/CombatLogTab.h"
 #include "tabs/MovementTab.h"
+#include "tabs/NavigationTab.h"
 #include "../objects/ObjectManager.h"
 #include <imgui.h>
 #include <memory>
@@ -22,6 +23,7 @@ GUIManager::GUIManager()
     m_drawingTab = std::make_unique<DrawingTab>();
     m_combatLogTab = std::make_unique<CombatLogTab>();
     m_movementTab = std::make_unique<MovementTab>();
+    m_navigationTab = std::make_unique<NavigationTab>();
 }
 
 GUIManager::~GUIManager() = default;
@@ -78,6 +80,9 @@ void GUIManager::Update() {
     }
     if (m_movementTab) {
         m_movementTab->Update(deltaTime);
+    }
+    if (m_navigationTab) {
+        m_navigationTab->Update();
     }
 }
 
@@ -206,6 +211,14 @@ void GUIManager::Render(bool* p_open) {
             if (ImGui::BeginTabItem("Movement")) {
                 if (m_movementTab) {
                     m_movementTab->Render();
+                }
+                ImGui::EndTabItem();
+            }
+            
+            // Navigation Tab
+            if (ImGui::BeginTabItem("Navigation")) {
+                if (m_navigationTab) {
+                    m_navigationTab->Render();
                 }
                 ImGui::EndTabItem();
             }

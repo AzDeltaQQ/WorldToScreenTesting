@@ -3,10 +3,16 @@
 #include "core/logs/Logger.h"
 #include "core/hook.h"
 #include "core/drawing/drawing.h"
+#include "core/objects/ObjectManager.h"
+#include "core/movement/MovementController.h"
+#include "core/navigation/NavigationManager.h"
 
 // Global instance
 extern WorldToScreenManager g_WorldToScreenManager;
 extern volatile bool g_shutdownRequested; // Use the global flag from hook.cpp
+
+// Module handle
+static HMODULE g_hModule = NULL;
 
 // Thread tracking
 static HANDLE g_initThread = nullptr;
@@ -38,6 +44,12 @@ DWORD WINAPI DelayedInitialization(LPVOID lpParam) {
         LOG_INFO("Shutdown requested after delay, aborting");
         return 0;
     }
+    
+    LOG_INFO("Delay complete, initializing systems...");
+
+    MovementController::Initialize(ObjectManager::GetInstance());
+    Navigation::NavigationManager::SetModuleHandle(g_hModule);
+    Navigation::NavigationManager::Instance().Initialize();
     
     LOG_INFO("Delay complete, initializing hooks...");
     
@@ -110,6 +122,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             LOG_INFO("DLL_PROCESS_ATTACH started");
             DisableThreadLibraryCalls(hModule);
             
+            g_hModule = hModule;
+
             // Reset shutdown flag
             g_shutdownRequested = false;
             

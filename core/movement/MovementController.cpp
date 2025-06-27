@@ -38,28 +38,23 @@ void MovementController::Initialize(ObjectManager* objectManager) {
     auto& instance = GetInstance();
     instance.m_handlePlayerClickToMoveFunc = reinterpret_cast<HandlePlayerClickToMoveFn>(WoWFunctions::HANDLE_PLAYER_CLICK_TO_MOVE);
     
-    // Initialize MinHook for movement completion detection
-    MH_STATUS status = MH_Initialize();
-    if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED) {
-        LOG_ERROR("Failed to initialize MinHook: " + std::to_string(status));
-    } else {
-        // Create hook for reset_tracking_and_input to detect movement completion
-        status = MH_CreateHook(
-            reinterpret_cast<void*>(WoWFunctions::RESET_TRACKING_AND_INPUT),
-            &MovementController::OnMovementStopHook,
-            reinterpret_cast<void**>(&g_originalResetTrackingFunc)
-        );
-        
+    // The main hook manager in dllmain should handle MH_Initialize
+    // We just create our specific hook here.
+    MH_STATUS status = MH_CreateHook(
+        reinterpret_cast<void*>(WoWFunctions::RESET_TRACKING_AND_INPUT),
+        &MovementController::OnMovementStopHook,
+        reinterpret_cast<void**>(&g_originalResetTrackingFunc)
+    );
+    
+    if (status == MH_OK) {
+        status = MH_EnableHook(reinterpret_cast<void*>(WoWFunctions::RESET_TRACKING_AND_INPUT));
         if (status == MH_OK) {
-            status = MH_EnableHook(reinterpret_cast<void*>(WoWFunctions::RESET_TRACKING_AND_INPUT));
-            if (status == MH_OK) {
-                LOG_INFO("Movement completion hook installed successfully");
-            } else {
-                LOG_ERROR("Failed to enable movement completion hook: " + std::to_string(status));
-            }
+            LOG_INFO("Movement completion hook installed successfully");
         } else {
-            LOG_ERROR("Failed to create movement completion hook: " + std::to_string(status));
+            LOG_ERROR("Failed to enable movement completion hook: " + std::to_string(status));
         }
+    } else {
+        LOG_ERROR("Failed to create movement completion hook: " + std::to_string(status));
     }
     
     LOG_INFO("MovementController initialized with handlePlayerClickToMove");
@@ -69,12 +64,13 @@ void MovementController::Shutdown() {
     if (s_instance) {
         s_instance->Stop(); // Stop any ongoing movement
         
-        // Cleanup MinHook if we installed hooks
+        // MinHook is managed globally now, so we don't uninitialize it here.
+        // We might need to remove specific hooks if this shutdown is isolated.
         if (g_originalResetTrackingFunc) {
-            MH_DisableHook(MH_ALL_HOOKS);
-            MH_Uninitialize();
+            MH_DisableHook(reinterpret_cast<void*>(WoWFunctions::RESET_TRACKING_AND_INPUT));
+            // MH_Uninitialize is no longer called here.
             g_originalResetTrackingFunc = nullptr;
-            LOG_INFO("MinHook uninitialized");
+            LOG_INFO("MovementController hook disabled");
         }
         
         s_instance.reset();
@@ -271,8 +267,6 @@ void MovementController::Update(float deltaTime) {
     UpdateMovementState();
 }
 
-
-
 void MovementController::QueueCommand(const MovementCommand& command) {
     std::lock_guard<std::mutex> lock(m_queueMutex);
     m_commandQueue.push(command);
@@ -285,17 +279,20 @@ void MovementController::ProcessQueuedCommands() {
     
     std::lock_guard<std::mutex> lock(m_queueMutex);
     
-    if (!m_commandQueue.empty()) {
-        LOG_INFO("ProcessQueuedCommands: Processing " + std::to_string(m_commandQueue.size()) + " commands in EndScene");
+    if (m_state.isMoving) {
+        return; // Busy walking – wait until current segment completes
     }
-    
-    while (!m_commandQueue.empty()) {
+
+    if (!m_commandQueue.empty()) {
         const MovementCommand& command = m_commandQueue.front();
         LOG_INFO("ProcessQueuedCommands: About to execute command type " + std::to_string(static_cast<int>(command.type)));
-        
+
         bool result = ExecuteCommand(command);
-        
+
         LOG_INFO("ProcessQueuedCommands: Command execution " + std::string(result ? "succeeded" : "failed"));
+
+        // Pop the command regardless of success to avoid stalls; caller can
+        // re-queue if needed.
         m_commandQueue.pop();
     }
 }

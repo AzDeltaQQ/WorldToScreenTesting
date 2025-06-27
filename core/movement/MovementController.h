@@ -112,7 +112,6 @@ private:
     bool m_autoStop;
     
     // Internal methods
-    bool GetPlayerPosition(Vector3& outPosition);
     void UpdateMovementState();
     void LogMovementAction(const std::string& action, const Vector3& position, uint64_t guid = 0);
     void QueueCommand(const MovementCommand& command);
@@ -137,6 +136,7 @@ public:
     void SetObjectManager(ObjectManager* objectManager) { m_objectManager = objectManager; }
     
     // Main movement functions
+    bool GetPlayerPosition(Vector3& outPosition);
     bool ClickToMove(const Vector3& targetPos);
     bool ClickToMove(const Vector3& targetPos, const Vector3& playerPos);
     bool MoveToObject(uint64_t targetGuid);

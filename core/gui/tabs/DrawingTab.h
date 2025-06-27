@@ -3,7 +3,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include "../../types.h"
 #include "../../types/types.h"
 #include "../../drawing/components/LineOfSightManager.h"
 #include "../../drawing/components/TextureManager.h"

@@ -2,7 +2,7 @@
 
 #include <d3d9.h>
 #include <functional>
-#include "types.h"
+#include "types/types.h"
 
 // Function pointer type for EndScene
 typedef HRESULT(__stdcall* EndSceneFn)(IDirect3DDevice9* device);

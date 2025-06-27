@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../types.h"
+#include "../types/types.h"
 #include "components/WorldToScreenCore.h"
 #include "components/RenderEngine.h"
 #include "components/LineManager.h"
