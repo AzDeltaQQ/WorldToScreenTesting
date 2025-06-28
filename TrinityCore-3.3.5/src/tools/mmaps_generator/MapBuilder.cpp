@@ -28,6 +28,7 @@
 #include <DetourNavMesh.h>
 #include <DetourNavMeshBuilder.h>
 #include <climits>
+#include <cmath>
 
 namespace MMAP
 {
@@ -819,9 +820,11 @@ namespace MMAP
         params.offMeshConAreas = meshData.offMeshConnectionsAreas.getCArray();
         params.offMeshConFlags = meshData.offMeshConnectionsFlags.getCArray();
 
-        params.walkableHeight = BASE_UNIT_DIM*config.walkableHeight;    // agent height
-        params.walkableRadius = BASE_UNIT_DIM*config.walkableRadius;    // agent radius
-        params.walkableClimb = BASE_UNIT_DIM*config.walkableClimb;      // keep less that walkableHeight (aka agent height)!
+        // Convert voxel-based agent properties to world units for Detour.
+        params.walkableHeight = config.ch * config.walkableHeight;    // agent height
+        params.walkableRadius = config.cs * config.walkableRadius;    // agent radius
+        params.walkableClimb = config.ch * config.walkableClimb;      // max step height
+
         params.tileX = (((bmin[0] + bmax[0]) / 2) - navMesh->getParams()->orig[0]) / GRID_SIZE;
         params.tileY = (((bmin[2] + bmax[2]) / 2) - navMesh->getParams()->orig[2]) / GRID_SIZE;
         rcVcopy(params.bmin, bmin);
@@ -1093,27 +1096,38 @@ namespace MMAP
         rcVcopy(config.bmax, bmax);
 
         config.maxVertsPerPoly = DT_VERTS_PER_POLYGON;
-        config.cs = tileConfig.BASE_UNIT_DIM;
-        config.ch = tileConfig.BASE_UNIT_DIM;
-        // Keeping these 2 slope angles the same reduces a lot the number of polys.
-        // 55 should be the minimum, maybe 70 is ok (keep in mind blink uses mmaps), 85 is too much for players
-        config.walkableSlopeAngle = m_maxWalkableAngle ? *m_maxWalkableAngle : 55;
-        config.walkableSlopeAngleNotSteep = m_maxWalkableAngleNotSteep ? *m_maxWalkableAngleNotSteep : 55;
+        
+        // --- START OF UPDATED PARAMETERS ---
+        // Finer voxel resolution *and* wider erosion so fences become un-walkable.
+        // We use the exact values we passed to mmaps_generator when rebuilding.
+
+        config.cs = 0.30f;   // --cellSize=0.30  (world-units per voxel in XZ)
+        config.ch = 0.20f;   // --cellHeight=0.20 (voxel height)
+
+        // Agent parameters (expressed in voxels)
+        config.walkableHeight = static_cast<int>(std::ceil(1.9f / config.ch)); // ≈ 10 voxels (player height)
+
+        // Make the agent wider so erosion removes thin wall tops/gaps
+        // Increased from 4 to 6 voxels (~1.8 yd) to better erode fence gaps
+        config.walkableRadius = m_bigBaseUnit ? 3 : 6; // 6 voxels (~1.8 yd) for normal tiles
+
+        // Reduce climb so agents cannot step onto low wall caps
+        config.walkableClimb = m_bigBaseUnit ? 2 : 4;
+        
+        // This can be controlled by the --maxAngle argument, but we'll hard-code your desired 35 degrees.
+        config.walkableSlopeAngle = 35.0f;                  // Corresponds to your --walkableSlope=35
+        // --- END OF UPDATED PARAMETERS ---
+        
+        config.walkableSlopeAngleNotSteep = m_maxWalkableAngleNotSteep ? *m_maxWalkableAngleNotSteep : 35.0f;
         config.tileSize = tileConfig.VERTEX_PER_TILE;
-        config.walkableRadius = m_bigBaseUnit ? 1 : 2;
         config.borderSize = config.walkableRadius + 3;
-        config.maxEdgeLen = tileConfig.VERTEX_PER_TILE + 1;        // anything bigger than tileSize
-        config.walkableHeight = m_bigBaseUnit ? 3 : 6;
-        // a value >= 3|6 allows npcs to walk over some fences
-        // a value >= 4|8 allows npcs to walk over all fences
-        config.walkableClimb = m_bigBaseUnit ? 3 : 6;
+        config.maxEdgeLen = tileConfig.VERTEX_PER_TILE + 1;
         config.minRegionArea = rcSqr(60);
         config.mergeRegionArea = rcSqr(50);
-        config.maxSimplificationError = 1.8f;           // eliminates most jagged edges (tiny polygons)
+        config.maxSimplificationError = 1.8f;
         config.detailSampleDist = config.cs * 16;
         config.detailSampleMaxError = config.ch * 1;
-
-        switch (mapID)
+    switch (mapID)
         {
             // Blade's Edge Arena
             case 562:

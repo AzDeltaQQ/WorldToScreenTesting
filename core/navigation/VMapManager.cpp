@@ -5,53 +5,88 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include "../../TrinityCore-3.3.5/src/common/Collision/VMapDefinitions.h"
+#include "../../TrinityCore-3.3.5/src/common/Collision/Management/VMapManager2.h"
+#include "../../TrinityCore-3.3.5/src/common/Collision/Management/IVMapManager.h"
 
+using namespace VMAP; // TrinityCore collision namespace
 using namespace Navigation;
 
 VMapManager::VMapManager() = default;
 
-VMapManager::~VMapManager() {
-    Shutdown();
-}
+VMapManager::~VMapManager() { Shutdown(); }
 
-bool VMapManager::Initialize(const std::string& mapsDirectory) {
-    try {
-        LOG_INFO("Initializing VMapManager with directory: " + mapsDirectory);
-        
-        m_mapsDirectory = mapsDirectory;
-        
-        // Determine base maps directory (parent of mmaps if path ends with /mmaps)
-        std::filesystem::path basePath = m_mapsDirectory;
-        if (basePath.filename() == "mmaps") {
-            basePath = basePath.parent_path();
-        }
+bool VMapManager::Initialize(const std::string& mmapsDirectory)
+{
+    m_mmapsDirectory = mmapsDirectory;
 
-        std::string vmapPath = (basePath / "vmaps").string();
-        
-        if (!std::filesystem::exists(vmapPath)) {
-            LOG_WARNING("VMap directory not found: " + vmapPath);
-            LOG_WARNING("VMap collision detection will be disabled");
-            m_isInitialized = false;
-            return false;
-        }
-        
-        m_isInitialized = true;
-        LOG_INFO("VMapManager initialized successfully (simplified mode)");
-        return true;
-    }
-    catch (const std::exception& e) {
-        LOG_ERROR("Exception during VMapManager initialization: " + std::string(e.what()));
+    if (!std::filesystem::exists(m_mmapsDirectory))
+    {
+        LOG_ERROR("mmaps directory does not exist: " + m_mmapsDirectory);
         return false;
     }
+
+    // derive vmaps sibling directory ( …/maps/vmaps )
+    std::filesystem::path basePath = std::filesystem::path(m_mmapsDirectory).parent_path();
+    m_vmapsDirectory = (basePath / "vmaps").string();
+
+    if (!std::filesystem::exists(m_vmapsDirectory))
+    {
+        LOG_ERROR("vmaps directory does not exist: " + m_vmapsDirectory);
+        return false;
+    }
+
+    m_tcVMapMgr = std::make_unique<VMapManager2>();
+
+    m_isInitialized = true;
+
+    LOG_INFO("VMapManager initialized. vmaps path: " + m_vmapsDirectory);
+    return true;
 }
 
-void VMapManager::Shutdown() {
-    if (m_isInitialized) {
-        LOG_INFO("Shutting down VMapManager");
-        m_loadedTiles.clear();
-        m_loadedTileCount = 0;
+void VMapManager::Shutdown()
+{
+    if (m_tcVMapMgr)
+    {
+        m_tcVMapMgr->unloadMap(0); // unload all via VMapManager2
+        m_tcVMapMgr.reset();
     }
+
+    m_loadedTiles.clear();
+    m_loadedTileCount = 0;
     m_isInitialized = false;
+}
+
+bool VMapManager::IsInLineOfSight(const Vector3& start, const Vector3& end, uint32_t mapId)
+{
+    if (!m_isInitialized || !m_tcVMapMgr)
+        return true;
+
+    return m_tcVMapMgr->isInLineOfSight(
+        mapId,
+        start.x, start.y, start.z,
+        end.x, end.y, end.z,
+        ModelIgnoreFlags::Nothing);
+}
+
+bool VMapManager::IsPointWalkable(const Vector3& point, uint32_t mapId) const {
+    if (!m_tcVMapMgr)
+        return true;
+
+    float ground = m_tcVMapMgr->getHeight(mapId, point.x, point.y, point.z + 50.0f /*search up*/, 100.0f);
+    return ground < VMAP_INVALID_HEIGHT; // if we got a height value, assume walkable.
+}
+
+bool VMapManager::HasTerrainObstacle(const Vector3& point, uint32_t mapId) const { return false; }
+
+float VMapManager::GetGroundHeight(const Vector3& point, uint32_t mapId) const
+{
+    if (!m_tcVMapMgr)
+        return point.z;
+
+    float h = m_tcVMapMgr->getHeight(mapId, point.x, point.y, point.z + 50.0f, 100.0f);
+    if (h < VMAP_INVALID_HEIGHT) return point.z;
+    return h;
 }
 
 bool VMapManager::LoadMapTile(uint32_t mapId, uint32_t tileX, uint32_t tileY) {
@@ -60,33 +95,17 @@ bool VMapManager::LoadMapTile(uint32_t mapId, uint32_t tileX, uint32_t tileY) {
         return false;
     }
 
-    try {
-        // Generate VMap file path
-        std::stringstream ss;
-        ss << m_mapsDirectory << "/vmaps/" << std::setfill('0') << std::setw(3) << mapId 
-           << "_" << std::setw(2) << tileX << "_" << std::setw(2) << tileY << ".vmtree";
-        std::string filePath = ss.str();
-        
-        // Check if file exists
-        if (!std::filesystem::exists(filePath)) {
-            LOG_INFO("VMap tile file not found (no collision data): " + filePath);
-            return true; // Not an error, just no collision data for this tile
-        }
-        
-        // Track the loaded tile
+    int result = m_tcVMapMgr->loadMap(m_vmapsDirectory.c_str(), mapId, static_cast<int>(tileX), static_cast<int>(tileY));
+    if (result == VMAP::VMAP_LOAD_RESULT_OK || result == VMAP::VMAP_LOAD_RESULT_IGNORED)
+    {
         uint64_t tileKey = GetTileKey(tileX, tileY);
         m_loadedTiles[mapId].insert(tileKey);
         m_loadedTileCount++;
-        
-        LOG_INFO("Loaded VMap tile - MapID: " + std::to_string(mapId) + 
-                ", TileX: " + std::to_string(tileX) + 
-                ", TileY: " + std::to_string(tileY));
         return true;
     }
-    catch (const std::exception& e) {
-        LOG_ERROR("Exception loading VMap tile: " + std::string(e.what()));
-        return false;
-    }
+
+    LOG_WARNING("Failed to load VMap tile (code " + std::to_string(result) + ") map=" + std::to_string(mapId) + " x=" + std::to_string(tileX) + " y=" + std::to_string(tileY));
+    return false;
 }
 
 void VMapManager::UnloadMapTile(uint32_t mapId, uint32_t tileX, uint32_t tileY) {
@@ -94,22 +113,15 @@ void VMapManager::UnloadMapTile(uint32_t mapId, uint32_t tileX, uint32_t tileY) 
         return;
     }
 
-    try {
-        uint64_t tileKey = GetTileKey(tileX, tileY);
-        auto mapIt = m_loadedTiles.find(mapId);
-        if (mapIt != m_loadedTiles.end()) {
-            mapIt->second.erase(tileKey);
-            if (m_loadedTileCount > 0) {
-                m_loadedTileCount--;
-            }
-        }
-        
-        LOG_INFO("Unloaded VMap tile - MapID: " + std::to_string(mapId) + 
-                ", TileX: " + std::to_string(tileX) + 
-                ", TileY: " + std::to_string(tileY));
-    }
-    catch (const std::exception& e) {
-        LOG_ERROR("Exception unloading VMap tile: " + std::string(e.what()));
+    if (m_tcVMapMgr)
+        m_tcVMapMgr->unloadMap(mapId, static_cast<int>(tileX), static_cast<int>(tileY));
+
+    uint64_t tileKey = GetTileKey(tileX, tileY);
+    auto it = m_loadedTiles.find(mapId);
+    if (it != m_loadedTiles.end())
+    {
+        it->second.erase(tileKey);
+        if (m_loadedTileCount) --m_loadedTileCount;
     }
 }
 
@@ -123,7 +135,7 @@ void VMapManager::LoadTileIfNeeded(uint32_t mapId, const Vector3& position) {
     
     // Check if tile is already loaded
     auto mapIt = m_loadedTiles.find(mapId);
-    if (mapIt != m_loadedTiles.end() && mapIt->second.find(tileKey) != mapIt->second.end()) {
+    if (mapIt != m_loadedTiles.end() && mapIt->second.count(tileKey) > 0) {
         return; // Already loaded
     }
     
@@ -131,38 +143,28 @@ void VMapManager::LoadTileIfNeeded(uint32_t mapId, const Vector3& position) {
     LoadMapTile(mapId, tileCoords.first, tileCoords.second);
 }
 
-bool VMapManager::IsInLineOfSight(const Vector3& start, const Vector3& end, uint32_t mapId) {
-    if (!m_isInitialized) {
-        return true; // Default to true if no collision data
-    }
-
-    // For now, return a simplified line of sight check
-    // This would need proper VMap file parsing to implement correctly
-    return CheckLineOfSightSimple(start, end, mapId);
-}
-
 float VMapManager::GetDistanceToWall(const Vector3& position, const Vector3& direction, float maxDistance, uint32_t mapId) {
-    if (!m_isInitialized) {
-        return maxDistance; // Return max distance if no collision data
+    if (!m_isInitialized || !m_tcVMapMgr)
+        return maxDistance;
+
+    Vector3 end = position + direction.Normalized() * maxDistance;
+
+    float rx = end.x, ry = end.y, rz = end.z;
+    if (m_tcVMapMgr->getObjectHitPos(mapId,
+        position.x, position.y, position.z,
+        end.x, end.y, end.z,
+        rx, ry, rz, 0.0f))
+    {
+        Vector3 hit(rx, ry, rz);
+        return position.Distance(hit);
     }
 
-    // For now, return a simplified wall distance check
-    // This would need proper VMap file parsing to implement correctly
-    return GetWallDistanceSimple(position, direction, maxDistance, mapId);
+    return maxDistance;
 }
 
 std::vector<VMapCollisionResult> VMapManager::GetNearbyWalls(const Vector3& center, float radius, uint32_t mapId) {
-    std::vector<VMapCollisionResult> results;
-    
-    if (!m_isInitialized) {
-        return results; // Return empty vector if no collision data
-    }
-
-    // For now, return a simplified nearby walls check
-    // This would need proper VMap file parsing to implement correctly
-    LOG_INFO("GetNearbyWalls called - simplified implementation returns empty results");
-    
-    return results;
+    std::vector<VMapCollisionResult> out; // TrinityCore API does not expose neighbourhood query; keep empty.
+    return out;
 }
 
 // Private helper methods
@@ -191,27 +193,4 @@ bool VMapManager::LoadVMapFile(const std::string& filePath) {
     // This would parse the actual VMap file format
     // For now, just check if the file exists
     return std::filesystem::exists(filePath);
-}
-
-bool VMapManager::CheckLineOfSightSimple(const Vector3& start, const Vector3& end, uint32_t mapId) {
-    // Simplified line of sight check
-    // In a real implementation, this would:
-    // 1. Load the appropriate VMap tiles
-    // 2. Parse the collision geometry
-    // 3. Perform ray-triangle intersection tests
-    
-    // For now, just return true (clear line of sight)
-    // This could be enhanced with basic terrain height checks
-    return true;
-}
-
-float VMapManager::GetWallDistanceSimple(const Vector3& position, const Vector3& direction, float maxDistance, uint32_t mapId) {
-    // Simplified wall distance check
-    // In a real implementation, this would:
-    // 1. Load the appropriate VMap tiles
-    // 2. Cast a ray in the given direction
-    // 3. Find the nearest collision point
-    
-    // For now, just return the max distance
-    return maxDistance;
 } 

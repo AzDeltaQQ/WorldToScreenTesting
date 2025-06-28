@@ -22,6 +22,8 @@
 #include "../../dependencies/recastnavigation/Detour/Include/DetourCommon.h"
 #include "../../dependencies/recastnavigation/Detour/Include/DetourNavMeshBuilder.h"
 
+#define MAX_PATH_WAYPOINTS 2048
+
 // Navigation area and flag constants from TrinityCore MapDefines.h
 enum NavArea
 {
@@ -197,14 +199,8 @@ NavigationManager& NavigationManager::Instance() {
 }
 
 NavigationManager::NavigationManager() 
-    : m_navMesh(nullptr), m_navMeshQuery(nullptr), m_vmapManager(nullptr) {
-    // Initialize simple VMapManager
-    m_vmapManager = std::make_unique<VMapManager>();
-    if (m_vmapManager && m_vmapManager->Initialize("./vmaps/")) {
-        LOG_INFO("NavigationManager: VMapManager initialized successfully");
-    } else {
-        LOG_WARNING("NavigationManager: Failed to initialize VMapManager");
-    }
+    : m_navMesh(nullptr), m_navMeshQuery(nullptr) {
+    // VMapManager will be created later in Initialize(), once we know the correct maps directory.
 }
 
 NavigationManager::~NavigationManager() {
@@ -242,23 +238,24 @@ bool NavigationManager::Initialize() {
     }
 
     // ---------------------------------------------------------------------
-    // Configure the query filter to allow walkable areas
-    // Include ground and steep ground, but exclude water/lava to avoid underwater paths
-    unsigned short includeFlags = NAV_GROUND | NAV_GROUND_STEEP; // Allow ground and steep areas
-    unsigned short excludeFlags = NAV_WATER | NAV_MAGMA_SLIME;   // Exclude water and lava
+    // AUTOMATIC TERRAIN-AWARE FILTER CONFIGURATION
+    // Let Detour handle obstacle avoidance automatically through proper area costs
+    // Include all walkable areas but heavily penalize problematic terrain
+    unsigned short includeFlags = NAV_GROUND | NAV_GROUND_STEEP; // Allow both ground types
+    unsigned short excludeFlags = NAV_WATER | NAV_MAGMA_SLIME;   // Exclude liquids
 
     m_filter->setIncludeFlags(includeFlags);
     m_filter->setExcludeFlags(excludeFlags);
 
-    // Area costs - prefer normal ground, heavily penalize steep terrain by default
-    m_filter->setAreaCost(NAV_AREA_GROUND,        1.0f);   // Normal ground - preferred
-    m_filter->setAreaCost(NAV_AREA_GROUND_STEEP,  10.0f);  // Steep terrain - heavily penalized to avoid hills
-    m_filter->setAreaCost(NAV_AREA_WATER,         100.0f); // Water - heavily discourage (though excluded)
-    m_filter->setAreaCost(NAV_AREA_MAGMA_SLIME,  100.0f);  // Lava/slime - heavily discourage (though excluded)
+    // AUTOMATIC AREA COSTS - designed to avoid obstacles naturally
+    m_filter->setAreaCost(NAV_AREA_GROUND,        1.0f);    // Normal ground - preferred
+    m_filter->setAreaCost(NAV_AREA_GROUND_STEEP,  250.0f);  // Steep terrain - heavily penalized (automatic hill avoidance)
+    m_filter->setAreaCost(NAV_AREA_WATER,         5.0f);    // Water - slight penalty when allowed
+    m_filter->setAreaCost(NAV_AREA_MAGMA_SLIME,   100.0f);  // Lava/slime - heavy penalty when allowed
     
-    LOG_INFO("Query filter configured - Include flags: " + std::to_string(includeFlags) + ", Exclude flags: " + std::to_string(excludeFlags));
+    LOG_INFO("Automatic terrain-aware filter configured - Steep terrain cost: 250x, Water cost: 5x");
 
-    // Initialize VMap collision detection
+    // Initialize VMap collision detection for nav-mesh enhancement
     m_vmapManager = std::make_unique<VMapManager>();
     if (!m_vmapManager->Initialize(m_mapsDirectory)) {
         LOG_WARNING("VMap initialization failed - collision detection will be disabled");
@@ -268,7 +265,7 @@ bool NavigationManager::Initialize() {
     }
 
     m_initialized = true;
-    LOG_INFO("NavigationManager initialized successfully");
+    LOG_INFO("NavigationManager initialized successfully with automatic obstacle avoidance");
     return true;
 }
 
@@ -399,191 +396,140 @@ bool NavigationManager::LoadMapNavMesh(int mapId) {
     LOG_INFO("  maxTiles: " + std::to_string(params.maxTiles));
     LOG_INFO("  maxPolys: " + std::to_string(params.maxPolys));
 
-    LOG_INFO("File state after reading header: good=" + std::to_string(file.good()) + ", eof=" + std::to_string(file.eof()) + ", fail=" + std::to_string(file.fail()) + ", bad=" + std::to_string(file.bad()));
-    auto currentPos = file.tellg();
-    file.seekg(0, std::ios::end);
-    LOG_INFO("Total file size: " + std::to_string(file.tellg()) + ", header size: " + std::to_string(sizeof(dtNavMeshParams)));
-    file.seekg(currentPos);
-
-    // Detour packs tile-poly refs into 22 bits: 22 - tileBits for polys.
-    // If the supplied maxPolys cannot fit, clamp so navMesh->init() succeeds.
-    auto nextPow2 = [](unsigned int v) {
-        v--;
-        v |= v >> 1;
-        v |= v >> 2;
-        v |= v >> 4;
-        v |= v >> 8;
-        v |= v >> 16;
-        v++;
-        return v;
-    };
-
-    auto ilog2 = [](unsigned int v) {
-        unsigned int r = 0;
-        while (v >>= 1) ++r;
-        return r;
-    };
-
-#ifndef DT_POLYREF64
-    unsigned int tileBits = ilog2(nextPow2(params.maxTiles));
-    // Detour 32-bit polyRef layout: saltBits >= 10 therefore polyBits <= 22 - tileBits
-    unsigned int maxPolyBits = 22u - tileBits;
-    unsigned int allowedMaxPolys = 1u << maxPolyBits; // e.g. tileBits=10 -> polyBits=12 -> 4096
-
-    if (params.maxPolys > static_cast<int>(allowedMaxPolys)) {
-        int original = params.maxPolys;
-        params.maxPolys = static_cast<int>(allowedMaxPolys);
-        LOG_WARNING("Clamped maxPolys from " + std::to_string(original) + " to " + std::to_string(params.maxPolys) +
-                    " (tileBits=" + std::to_string(tileBits) + ", polyBits=" + std::to_string(maxPolyBits) + ")");
-    }
-#else
-    // 64-bit poly refs have ample bits; keep generator-supplied maxPolys.
-#endif
-
-    // Create and initialize the navigation mesh
+    // Create and initialize nav mesh
     dtNavMesh* navMesh = dtAllocNavMesh();
     if (!navMesh) {
-        LOG_ERROR("Failed to allocate navigation mesh for map " + std::to_string(mapId));
+        LOG_ERROR("Failed to allocate NavMesh");
+        file.close();
         return false;
     }
 
-    dtStatus status = navMesh->init(&params);
-    if (dtStatusFailed(status)) {
-        LOG_ERROR("Failed to initialize navigation mesh for map " + std::to_string(mapId));
+    if (dtStatusFailed(navMesh->init(&params))) {
+        LOG_ERROR("Failed to initialize NavMesh with params");
+        dtFreeNavMesh(navMesh);
+        file.close();
+        return false;
+    }
+
+    // Load nav mesh tiles automatically
+    int tilesLoaded = 0;
+    int tilesWithPolygons = 0;
+    int totalPolygons = 0;
+    int totalVertices = 0;
+
+    // Read all tiles from the directory
+    std::filesystem::path tilesDir(m_mapsDirectory);
+    std::ostringstream tilePattern;
+    tilePattern << std::setfill('0') << std::setw(3) << mapId;
+    std::string mapPrefix = tilePattern.str();
+
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(tilesDir)) {
+            if (!entry.is_regular_file()) continue;
+            
+            std::string filename = entry.path().filename().string();
+            if (filename.length() < 12 || filename.substr(filename.length() - 7) != ".mmtile") continue;
+            if (filename.substr(0, 3) != mapPrefix) continue;
+
+            // Extract tile coordinates from filename (format: 000XXYY.mmtile)
+            int tileY = std::stoi(filename.substr(3, 2));
+            int tileX = std::stoi(filename.substr(5, 2));
+
+            std::ifstream tileFile(entry.path(), std::ios::binary);
+            if (!tileFile.is_open()) continue;
+
+            // Read tile header
+            MmapTileHeader header;
+            tileFile.read(reinterpret_cast<char*>(&header), sizeof(MmapTileHeader));
+            if (tileFile.gcount() != sizeof(MmapTileHeader)) {
+                tileFile.close();
+                continue;
+            }
+
+            // Validate header
+            if (header.mmapMagic != MMAP_MAGIC || header.dtVersion != DT_NAVMESH_VERSION || header.mmapVersion != MMAP_VERSION) {
+                LOG_WARNING("Invalid tile header in file: " + filename);
+                tileFile.close();
+                continue;
+            }
+
+            // Read tile data
+            std::vector<unsigned char> tileData(header.size);
+            tileFile.read(reinterpret_cast<char*>(tileData.data()), header.size);
+            if (static_cast<uint32_t>(tileFile.gcount()) != header.size) {
+                LOG_WARNING("Failed to read complete tile data from: " + filename);
+                tileFile.close();
+                continue;
+            }
+            tileFile.close();
+
+            // Add tile to nav mesh
+            dtTileRef tileRef = 0;
+            unsigned char* data = new unsigned char[header.size];
+            std::memcpy(data, tileData.data(), header.size);
+            
+            dtStatus status = navMesh->addTile(data, header.size, DT_TILE_FREE_DATA, 0, &tileRef);
+            if (dtStatusFailed(status) || !tileRef) {
+                LOG_WARNING("Failed to add tile to navmesh: " + filename);
+                delete[] data;
+                continue;
+            }
+
+            // AUTOMATICALLY LOAD CORRESPONDING VMAP TILES
+            if (m_vmapManager && m_vmapManager->IsLoaded()) {
+                m_vmapManager->LoadMapTile(static_cast<uint32_t>(mapId), static_cast<uint32_t>(tileX), static_cast<uint32_t>(tileY));
+            }
+
+            // Track loaded tile and gather statistics
+            uint32_t tileId = (static_cast<uint32_t>(tileX) << 16) | static_cast<uint32_t>(tileY);
+            
+            // Count polygons and vertices in this tile
+            const dtMeshTile* tile = navMesh->getTileByRef(tileRef);
+            if (tile && tile->header) {
+                if (tile->header->polyCount > 0) {
+                    tilesWithPolygons++;
+                    totalPolygons += tile->header->polyCount;
+                    totalVertices += tile->header->vertCount;
+                }
+            }
+
+            tilesLoaded++;
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        LOG_ERROR("Filesystem error while loading tiles: " + std::string(e.what()));
+    }
+
+    file.close();
+
+    if (tilesLoaded == 0) {
+        LOG_ERROR("No tiles loaded for map " + std::to_string(mapId));
         dtFreeNavMesh(navMesh);
         return false;
     }
 
-    // Close the params file as we will load separate tile files next
-    file.close();
+    LOG_INFO("Loaded " + std::to_string(tilesLoaded) + " tiles for map " + std::to_string(mapId));
+    LOG_INFO("  Total loaded tiles with polygons: " + std::to_string(tilesWithPolygons));
+    LOG_INFO("  Total polygons: " + std::to_string(totalPolygons));
+    LOG_INFO("  Total vertices: " + std::to_string(totalVertices));
 
-    // ---------------------------------------------------------------------
-    // Load ALL available tiles for this map to ensure coverage everywhere
-    // The real fix is to regenerate mmaps with smaller walkableRadius to prevent wall clipping
-    // ---------------------------------------------------------------------
-
-    std::unordered_map<uint32_t, dtTileRef> loadedTilesTemp;
-    int tilesLoaded = 0;
-    
-    LOG_INFO("Loading ALL available tiles for map " + std::to_string(mapId) + " to ensure complete coverage");
-    
-    for (const auto& entry : std::filesystem::directory_iterator(m_mapsDirectory)) {
-        if (!entry.is_regular_file())
-            continue;
-
-        const std::filesystem::path& path = entry.path();
-        if (path.extension() != ".mmtile")
-            continue;
-
-        std::string filename = path.stem().string(); // without extension
-        if (filename.size() != 7)
-            continue; // invalid length
-
-        // Check if first 3 chars match mapId
-        int fileMapId = std::stoi(filename.substr(0, 3));
-        if (fileMapId != mapId)
-            continue;
-
-        // Extract tileY and tileX
-        int tileY = std::stoi(filename.substr(3, 2));
-        int tileX = std::stoi(filename.substr(5, 2));
-
-        std::ifstream tileFile(path, std::ios::binary);
-        if (!tileFile.is_open()) {
-            LOG_WARNING("Could not open tile file: " + path.string());
-            continue;
-        }
-
-        MmapTileHeader tileHeader;
-        tileFile.read(reinterpret_cast<char*>(&tileHeader), sizeof(MmapTileHeader));
-        if (tileFile.gcount() != sizeof(MmapTileHeader)) {
-            LOG_WARNING("Failed to read tile header from: " + path.string());
-            continue;
-        }
-
-        if (tileHeader.mmapMagic != MMAP_MAGIC ||
-            tileHeader.dtVersion != DT_NAVMESH_VERSION ||
-            tileHeader.mmapVersion != MMAP_VERSION) {
-            LOG_WARNING("Tile file version mismatch or invalid magic: " + path.string());
-            continue;
-        }
-
-        if (tileHeader.size == 0) {
-            LOG_WARNING("Tile file reports zero data size: " + path.string());
-            continue;
-        }
-
-        // Allocate permanent buffer for Detour – navMesh will take ownership and free it with dtFree
-        unsigned char* tileData = static_cast<unsigned char*>(dtAlloc(tileHeader.size, DT_ALLOC_PERM));
-        if (!tileData) {
-            LOG_ERROR("Failed to allocate " + std::to_string(tileHeader.size) + " bytes for tile (" + std::to_string(tileX) + "," + std::to_string(tileY) + ")");
-            continue;
-        }
-
-        tileFile.seekg(sizeof(MmapTileHeader), std::ios::beg); // Ensure we're right after header
-        tileFile.read(reinterpret_cast<char*>(tileData), tileHeader.size);
-        if (static_cast<uint32_t>(tileFile.gcount()) != tileHeader.size) {
-            LOG_WARNING("Failed to read complete tile data from: " + path.string());
-            dtFree(tileData);
-            continue;
-        }
-
-        dtTileRef lastRef = 0;
-        dtStatus addStatus = navMesh->addTile(tileData, tileHeader.size, DT_TILE_FREE_DATA, 0, &lastRef);
-        if (dtStatusFailed(addStatus)) {
-            LOG_WARNING("Detour rejected tile (" + std::to_string(tileX) + "," + std::to_string(tileY) + ") for map " + std::to_string(mapId));
-            dtFree(tileData);
-            continue;
-        }
-
-        // Store mapping so we can unload later
-        uint32_t tileIdKey = (static_cast<uint32_t>(tileX) << 16) | static_cast<uint32_t>(tileY);
-        loadedTilesTemp[tileIdKey] = lastRef;
-
-        tilesLoaded++;
+    // Initialize query
+    if (dtStatusFailed(m_navMeshQuery->init(navMesh, 2048))) {
+        LOG_ERROR("Failed to initialize NavMeshQuery");
+        dtFreeNavMesh(navMesh);
+        return false;
     }
 
-    LOG_INFO("Loaded " + std::to_string(tilesLoaded) + " tiles from MMap tile files for map " + std::to_string(mapId));
-
-    LOG_INFO("NavMesh for map " + std::to_string(mapId) + " loaded. Analyzing tiles...");
-    int totalPolys = 0;
-    int totalVerts = 0;
-    int loadedTilesWithPolys = 0;
-    const dtNavMesh* constNavMesh = navMesh;
-    for (int i = 0; i < constNavMesh->getMaxTiles(); ++i) {
-        const dtMeshTile* tile = constNavMesh->getTile(i);
-        if (tile && tile->header && tile->header->polyCount > 0) {
-            totalPolys += tile->header->polyCount;
-            totalVerts += tile->header->vertCount;
-            loadedTilesWithPolys++;
-            LOG_INFO("  Tile " + std::to_string(i) + " at (" + std::to_string(tile->header->x) + ", " + std::to_string(tile->header->y) +
-                ") with " + std::to_string(tile->header->polyCount) + " polys, " + std::to_string(tile->header->vertCount) + " verts.");
-            LOG_INFO("    bmin: (" + std::to_string(tile->header->bmin[0]) + ", " + std::to_string(tile->header->bmin[1]) + ", " + std::to_string(tile->header->bmin[2]) + ")");
-            LOG_INFO("    bmax: (" + std::to_string(tile->header->bmax[0]) + ", " + std::to_string(tile->header->bmax[1]) + ", " + std::to_string(tile->header->bmax[2]) + ")");
-        }
-    }
-    LOG_INFO("NavMesh for map " + std::to_string(mapId) + " analysis complete.");
-    LOG_INFO("  Total loaded tiles with polygons: " + std::to_string(loadedTilesWithPolys));
-    LOG_INFO("  Total polygons: " + std::to_string(totalPolys));
-    LOG_INFO("  Total vertices: " + std::to_string(totalVerts));
-
-    // Create map data structure
+    // Store the loaded map data
     MapData mapData;
     mapData.navMesh = navMesh;
     mapData.mapId = mapId;
-    mapData.loadedTiles = std::move(loadedTilesTemp);
-    
-    // Store the loaded map
     m_loadedMaps[mapId] = std::move(mapData);
 
-    LOG_INFO("Successfully loaded navigation mesh for map " + std::to_string(mapId));
-
-    // Post-process the mesh to mark steep areas.
-    MarkSteepPolys(navMesh, 1.5f);
-
-    // Analyze loaded tiles for debugging.
+    // AUTOMATIC STEEP POLYGON MARKING - no manual controls needed
+    MarkSteepPolys(navMesh, 2.0f); // Mark polygons with >2 yard height difference as steep
     AnalyzeNavMeshTiles(navMesh);
 
+    LOG_INFO("Successfully loaded navigation mesh for map " + std::to_string(mapId));
     return true;
 }
 
@@ -594,276 +540,217 @@ bool NavigationManager::LoadMapTile(int mapId, int tileX, int tileY) {
 
 PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
                                      NavigationPath& path, const PathfindingOptions& options) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-
-    if (m_loadedMaps.empty()) {
-        LOG_ERROR("FindPath failed: No maps are loaded.");
+    if (!m_initialized || !m_navMeshQuery || m_loadedMaps.empty()) {
+        LOG_ERROR("NavigationManager not properly initialized or no maps loaded");
         path.result = PathResult::FAILED_NO_NAVMESH;
-        return path.result;
+        return PathResult::FAILED_NO_NAVMESH;
     }
 
-    // For now, use the first loaded map. This should be improved later.
-    MapData& mapData = m_loadedMaps.begin()->second;
-    dtNavMesh* navMesh = mapData.navMesh;
-    
-    if (!navMesh || !m_navMeshQuery) {
-        LOG_ERROR("FindPath failed: NavMesh or NavMeshQuery not initialized for map " + std::to_string(mapData.mapId));
-        path.result = PathResult::FAILED_NO_NAVMESH;
-        return path.result;
+    // AUTOMATIC FILTER CONFIGURATION based on terrain preferences
+    dtQueryFilter* filter = CreateCustomFilter(options);
+    if (!filter) {
+        LOG_ERROR("Failed to create query filter");
+        path.result = PathResult::FAILED_INVALID_INPUT;
+        return PathResult::FAILED_INVALID_INPUT;
     }
 
-    // Initialize the dtNavMeshQuery for this map.
-    {
-        int maxNodes = 32768;
-        int totalPossiblePolys = navMesh->getMaxTiles() * navMesh->getParams()->maxPolys;
-        maxNodes = std::max(maxNodes, totalPossiblePolys / 4);
-        if (maxNodes > 0xFFFF)
-            maxNodes = 0xFFFF; // dtNavMeshQuery hard limit
-
-        dtStatus qs = m_navMeshQuery->init(navMesh, maxNodes);
-        if (dtStatusFailed(qs)) {
-            LOG_ERROR("FindPath failed: Could not initialize NavMeshQuery for map " + std::to_string(mapData.mapId));
-            path.result = PathResult::FAILED_NO_NAVMESH;
-            return path.result;
-        }
-    }
-
-    // Use direct coordinate mapping (WoW_X -> recastX, WoW_Z -> recastY, WoW_Y -> recastZ)
-    // No additional origin shift – MMaps are stored in absolute world-space coordinates.
+    // Convert coordinates to Recast space
     Vector3 recastStart = WoWToRecast(start);
-    Vector3 recastEnd   = WoWToRecast(end);
+    Vector3 recastEnd = WoWToRecast(end);
 
     LOG_INFO("  recastStart: (" + std::to_string(recastStart.x) + ", " + std::to_string(recastStart.y) + ", " + std::to_string(recastStart.z) + ")");
-    LOG_INFO("  recastEnd  : (" + std::to_string(recastEnd.x)   + ", " + std::to_string(recastEnd.y)   + ", " + std::to_string(recastEnd.z)   + ")");
+    LOG_INFO("  recastEnd  : (" + std::to_string(recastEnd.x) + ", " + std::to_string(recastEnd.y) + ", " + std::to_string(recastEnd.z) + ")");
 
-    // Configure filter based on pathfinding options for terrain avoidance
-    dtQueryFilter* filter = CreateCustomFilter(options);
+    // Find start and end polygons with automatic fallback
+    float extents[3] = {4.0f, 8.0f, 4.0f}; // Standard search extents
+    dtPolyRef startRef, endRef;
+    float startNearest[3], endNearest[3];
 
-    auto FindNearestPoly = [&](const Vector3& pos, dtPolyRef& outRef, float outPt[3], const char* tag) -> bool {
-        // Debug: Check what tiles exist around this position
-        LOG_INFO(std::string("    Searching for ") + tag + " polygon at: (" + std::to_string(pos.x) + ", " + std::to_string(pos.y) + ", " + std::to_string(pos.z) + ")");
-        
-        // TrinityCore's proven polygon search approach with expanded search ranges
-        // First try with reasonable search box
-        float extents[3] = {10.0f, 15.0f, 10.0f};    // Larger initial search area
-        float closestPoint[3] = {0.0f, 0.0f, 0.0f};
-        
-        dtStatus res = m_navMeshQuery->findNearestPoly(&pos.x, extents, filter, &outRef, closestPoint);
-        if (dtStatusSucceed(res) && outRef != 0) {
-            float distance = dtVdist(closestPoint, &pos.x);
-            if (distance <= 20.0f) { // More generous distance validation
-                outPt[0] = closestPoint[0];
-                outPt[1] = closestPoint[1]; 
-                outPt[2] = closestPoint[2];
-                LOG_INFO(std::string("    ") + tag + " nearestPoly found (normal search) distance=" + std::to_string(distance));
-                return true;
-            } else {
-                LOG_WARNING(std::string("    ") + tag + " found polygon but distance too far: " + std::to_string(distance));
-            }
-        } else {
-            LOG_WARNING(std::string("    ") + tag + " findNearestPoly failed with status: " + std::to_string(res));
-        }
-
-        // Fallback to very large search box if normal search fails
-        extents[0] = 50.0f; // Horizontal
-        extents[1] = 100.0f; // Vertical - very generous for elevation differences
-        extents[2] = 50.0f; // Horizontal
-        res = m_navMeshQuery->findNearestPoly(&pos.x, extents, filter, &outRef, closestPoint);
-        if (dtStatusSucceed(res) && outRef != 0) {
-            float distance = dtVdist(closestPoint, &pos.x);
-            if (distance <= 100.0f) { // Very lenient for fallback search
-                outPt[0] = closestPoint[0];
-                outPt[1] = closestPoint[1];
-                outPt[2] = closestPoint[2];
-                LOG_INFO(std::string("    ") + tag + " nearestPoly found (wide search) distance=" + std::to_string(distance));
-                return true;
-            } else {
-                LOG_WARNING(std::string("    ") + tag + " found polygon in wide search but distance too far: " + std::to_string(distance));
-            }
-        } else {
-            LOG_WARNING(std::string("    ") + tag + " wide search also failed with status: " + std::to_string(res));
-        }
-
-        LOG_ERROR(std::string("    ") + tag + " could not find a valid polygon within acceptable distance");
-        return false;
-    };
-
-    dtPolyRef startPoly = 0, endPoly = 0;
-    float nearestStartPt[3], nearestEndPt[3];
-
-    if (!FindNearestPoly(recastStart, startPoly, nearestStartPt, "start")) {
-        m_lastError = "FindPath failed: Could not find a polygon near the start point.";
-        LOG_ERROR(m_lastError);
+    // Find start polygon
+    LOG_INFO("    Searching for start polygon at: (" + std::to_string(recastStart.x) + ", " + std::to_string(recastStart.y) + ", " + std::to_string(recastStart.z) + ")");
+    dtStatus startStatus = m_navMeshQuery->findNearestPoly(&recastStart.x, extents, filter, &startRef, startNearest);
+    if (dtStatusFailed(startStatus) || startRef == 0) {
+        LOG_ERROR("    Failed to find start polygon");
+        delete filter;
         path.result = PathResult::FAILED_START_POLY;
-        return path.result;
+        return PathResult::FAILED_START_POLY;
     }
-
-    if (!FindNearestPoly(recastEnd, endPoly, nearestEndPt, "end")) {
-        m_lastError = "FindPath failed: Could not find a polygon near the end point.";
-        LOG_ERROR(m_lastError);
-        path.result = PathResult::FAILED_END_POLY;
-        return path.result;
-    }
-
-    // ----- poly path -----
-    const int MAX_POLYS = 8192; // generous; node pool is 65k so this is safe
-    std::vector<dtPolyRef> polyPath(MAX_POLYS);
-    int polyPathCount = 0;
-
-    dtStatus pathStatus = m_navMeshQuery->findPath(startPoly, endPoly, nearestStartPt, nearestEndPt,
-                                                   filter, polyPath.data(), &polyPathCount, MAX_POLYS);
-
-    if (dtStatusFailed(pathStatus) || polyPathCount == 0) {
-        m_lastError = "FindPath failed: Could not create a path between the points.";
-        LOG_ERROR(m_lastError);
-        path.result = PathResult::FAILED_PATHFIND;
-        return path.result;
-    }
-
-    LOG_INFO("  Polygon path found with " + std::to_string(polyPathCount) + " polygons");
     
-    // Log first few and last few polygon IDs for debugging
-    for (int i = 0; i < std::min(5, polyPathCount); ++i) {
+    float startDist = dtVdist(&recastStart.x, startNearest);
+    LOG_INFO("    start nearestPoly found (normal search) distance=" + std::to_string(startDist));
+
+    // Find end polygon
+    LOG_INFO("    Searching for end polygon at: (" + std::to_string(recastEnd.x) + ", " + std::to_string(recastEnd.y) + ", " + std::to_string(recastEnd.z) + ")");
+    dtStatus endStatus = m_navMeshQuery->findNearestPoly(&recastEnd.x, extents, filter, &endRef, endNearest);
+    if (dtStatusFailed(endStatus) || endRef == 0) {
+        LOG_ERROR("    Failed to find end polygon");
+        delete filter;
+        path.result = PathResult::FAILED_END_POLY;
+        return PathResult::FAILED_END_POLY;
+    }
+    
+    float endDist = dtVdist(&recastEnd.x, endNearest);
+    LOG_INFO("    end nearestPoly found (normal search) distance=" + std::to_string(endDist));
+
+    // AUTOMATIC PATH GENERATION - let Detour handle all obstacle avoidance
+    const int MAX_POLYS = 512;
+    std::vector<dtPolyRef> polyPath(MAX_POLYS);
+    int polyCount = 0;
+
+    dtStatus pathStatus = m_navMeshQuery->findPath(startRef, endRef, startNearest, endNearest, filter, polyPath.data(), &polyCount, MAX_POLYS);
+    if (dtStatusFailed(pathStatus) || polyCount == 0) {
+        LOG_ERROR("  Failed to find polygon path");
+        delete filter;
+        path.result = PathResult::FAILED_PATHFIND;
+        return PathResult::FAILED_PATHFIND;
+    }
+
+    LOG_INFO("  Polygon path found with " + std::to_string(polyCount) + " polygons");
+
+    // Log first few and last few polygons for debugging
+    for (int i = 0; i < std::min(5, polyCount); ++i) {
         LOG_INFO("    Poly[" + std::to_string(i) + "]: " + std::to_string(polyPath[i]));
     }
-    if (polyPathCount > 10) {
-        LOG_INFO("    ... (" + std::to_string(polyPathCount - 10) + " polygons skipped) ...");
-        for (int i = polyPathCount - 5; i < polyPathCount; ++i) {
-            LOG_INFO("    Poly[" + std::to_string(i) + "]: " + std::to_string(polyPath[i]));
-        }
-    } else if (polyPathCount > 5) {
-        for (int i = 5; i < polyPathCount; ++i) {
+    if (polyCount > 10) {
+        LOG_INFO("    ... (" + std::to_string(polyCount - 10) + " polygons skipped) ...");
+        for (int i = std::max(5, polyCount - 5); i < polyCount; ++i) {
             LOG_INFO("    Poly[" + std::to_string(i) + "]: " + std::to_string(polyPath[i]));
         }
     }
-    
-    // Analyze area types in the polygon path to understand terrain usage
-    std::map<unsigned char, int> areaTypeCounts;
-    const dtNavMesh* attachedNavMesh = m_navMeshQuery->getAttachedNavMesh();
-    for (int i = 0; i < polyPathCount; ++i) {
-        // Get the tile and polygon from the polygon reference
+
+    // Analyze area types in the path for debugging
+    std::map<int, int> areaCounts;
+    for (int i = 0; i < polyCount; ++i) {
         const dtMeshTile* tile = 0;
         const dtPoly* poly = 0;
-        if (dtStatusSucceed(attachedNavMesh->getTileAndPolyByRef(polyPath[i], &tile, &poly))) {
-            unsigned char areaType = poly->getArea();
-            areaTypeCounts[areaType]++;
+        if (dtStatusSucceed(m_navMesh->getTileAndPolyByRef(polyPath[i], &tile, &poly))) {
+            areaCounts[poly->getArea()]++;
         }
     }
     
     LOG_INFO("  Area types in polygon path:");
-    for (const auto& pair : areaTypeCounts) {
+    for (const auto& pair : areaCounts) {
         std::string areaName;
+        float cost = 0.0f;
         switch (pair.first) {
-            case NAV_AREA_GROUND: areaName = "GROUND"; break;
-            case NAV_AREA_GROUND_STEEP: areaName = "GROUND_STEEP"; break;
-            case NAV_AREA_WATER: areaName = "WATER"; break;
-            case NAV_AREA_MAGMA_SLIME: areaName = "MAGMA_SLIME"; break;
+            case NAV_AREA_GROUND: areaName = "GROUND"; cost = filter->getAreaCost(NAV_AREA_GROUND); break;
+            case NAV_AREA_GROUND_STEEP: areaName = "GROUND_STEEP"; cost = filter->getAreaCost(NAV_AREA_GROUND_STEEP); break;
+            case NAV_AREA_WATER: areaName = "WATER"; cost = filter->getAreaCost(NAV_AREA_WATER); break;
+            case NAV_AREA_MAGMA_SLIME: areaName = "MAGMA_SLIME"; cost = filter->getAreaCost(NAV_AREA_MAGMA_SLIME); break;
             default: areaName = "UNKNOWN(" + std::to_string(pair.first) + ")"; break;
         }
-        float areaCost = filter->getAreaCost(pair.first);
-        LOG_INFO("    " + areaName + " (area " + std::to_string(pair.first) + "): " + 
-                 std::to_string(pair.second) + " polygons, cost=" + std::to_string(areaCost));
+        LOG_INFO("    " + areaName + " (area " + std::to_string(pair.first) + "): " + std::to_string(pair.second) + " polygons, cost=" + std::to_string(cost));
     }
 
-    // ----- straight path -----
-    int maxStraight = polyPathCount * 3; // worst-case heuristic
-    std::vector<float> straightPath(maxStraight * 3); // verts
+    // AUTOMATIC WAYPOINT GENERATION with optimal segment length
+    const int maxStraight = 512;
     std::vector<unsigned char> straightFlags(maxStraight);
     std::vector<dtPolyRef> straightPolys(maxStraight);
-    int waypointCount = 0;
+    std::vector<float> straightPath(maxStraight * 3);
+    int straightCount = 0;
 
-    // Use flags that provide a detailed path around corners.
-    const int STRAIGHT_PATH_OPTIONS = DT_STRAIGHTPATH_ALL_CROSSINGS;
-    dtStatus straightPathStatus = m_navMeshQuery->findStraightPath(nearestStartPt, nearestEndPt,
-                                                                   polyPath.data(), polyPathCount,
-                                                                   straightPath.data(), straightFlags.data(), straightPolys.data(),
-                                                                   &waypointCount, maxStraight, STRAIGHT_PATH_OPTIONS);
+    // Generate straight path with ALL_CROSSINGS for maximum waypoints to avoid obstacles
+    dtStatus straightStatus = m_navMeshQuery->findStraightPath(
+        startNearest, endNearest, polyPath.data(), polyCount,
+        straightPath.data(), straightFlags.data(), straightPolys.data(), &straightCount, maxStraight,
+        DT_STRAIGHTPATH_ALL_CROSSINGS | DT_STRAIGHTPATH_AREA_CROSSINGS
+    );
 
-    if (dtStatusFailed(straightPathStatus) || waypointCount == 0) {
-        m_lastError = "FindPath failed: Could not create a straight path.";
-        LOG_ERROR(m_lastError);
+    if (dtStatusFailed(straightStatus) || straightCount == 0) {
+        LOG_ERROR("  Failed to generate straight path");
+        delete filter;
         path.result = PathResult::FAILED_PATHFIND;
-        return path.result;
+        return PathResult::FAILED_PATHFIND;
     }
 
-    LOG_INFO("  Straight path generated with " + std::to_string(waypointCount) + " waypoints from " + std::to_string(polyPathCount) + " polygons");
+    LOG_INFO("  Straight path generated with " + std::to_string(straightCount) + " waypoints from " + std::to_string(polyCount) + " polygons");
 
-    // ---- populate waypoint list with surface-level validation ----
-    path.waypoints.clear();
-    path.totalLength = 0.0f;
-
-    // Always push the exact start position as WP0
-    path.waypoints.emplace_back(start);
-
-    for (int i = 0; i < waypointCount; ++i)
-    {
-        float* v = &straightPath[i * 3]; // x,y,z from Detour
+    // AUTOMATIC SEGMENT LENGTH OPTIMIZATION with VMap collision detection
+    std::vector<Waypoint> finalWaypoints;
+    const float MAX_SEGMENT_LENGTH = 8.0f; // Reduce to 8 yards for better obstacle detection
+    
+    // ENHANCED PATHFINDING: Combine nav-mesh with VMap collision detection
+    // The nav-mesh handles major terrain/obstacles, VMap catches fine details like fences
+    
+    for (int i = 0; i < straightCount; ++i) {
+        float* v = &straightPath[i * 3];
         Vector3 recastPos(v[0], v[1], v[2]);
         Vector3 wowPos = RecastToWoW(recastPos);
+        
+        LOG_INFO("  WP" + std::to_string(i + 1) + " recast: (" + std::to_string(recastPos.x) + ", " + std::to_string(recastPos.y) + ", " + std::to_string(recastPos.z) + ") -> wow: (" + std::to_string(wowPos.x) + ", " + std::to_string(wowPos.y) + ", " + std::to_string(wowPos.z) + ")");
 
-        // CRITICAL: Surface-level validation to prevent underground waypoints
-        // If this waypoint is significantly below the start position, it's likely underground
-        float heightDifference = start.z - wowPos.z;
-        if (heightDifference > 10.0f) { // More than 10 yards below start = underground
-            LOG_WARNING("  WP" + std::to_string(i) + " rejected - underground (height diff: " + std::to_string(heightDifference) + ")");
-            continue;
+        // Add waypoint with VMap validation
+        if (finalWaypoints.empty()) {
+            finalWaypoints.emplace_back(wowPos);
+        } else {
+            Vector3 lastPos = finalWaypoints.back().position;
+            float segmentLength = lastPos.Distance(wowPos);
+            
+            // AUTOMATIC SEGMENT SUBDIVISION with VMap collision checking
+            if (segmentLength > MAX_SEGMENT_LENGTH) {
+                int subdivisions = static_cast<int>(std::ceil(segmentLength / MAX_SEGMENT_LENGTH));
+                for (int j = 1; j < subdivisions; ++j) {
+                    float t = static_cast<float>(j) / subdivisions;
+                    Vector3 interpPos = lastPos + (wowPos - lastPos) * t;
+                    
+                    // VMap collision check for subdivided segments
+                    if (m_vmapManager && m_vmapManager->IsInLineOfSight(lastPos, interpPos, options.mapId)) {
+                        finalWaypoints.emplace_back(interpPos);
+                    } else {
+                        // If VMap detects collision, try to find alternative route
+                        Vector3 adjustedPos = FindSafePosition(lastPos, interpPos, options.mapId);
+                        finalWaypoints.emplace_back(adjustedPos);
+                        LOG_INFO("    VMap collision detected, adjusted waypoint");
+                    }
+                }
+            }
+            
+            // Final waypoint with VMap validation
+            if (m_vmapManager && !m_vmapManager->IsInLineOfSight(lastPos, wowPos, options.mapId)) {
+                // VMap detected collision - try to find safe alternative
+                Vector3 adjustedPos = FindSafePosition(lastPos, wowPos, options.mapId);
+                finalWaypoints.emplace_back(adjustedPos);
+                LOG_INFO("    VMap collision detected at waypoint, adjusted position");
+            } else {
+                finalWaypoints.emplace_back(wowPos);
+            }
         }
-
-        // Skip if this converts to start or end (will add end later)
-        if (wowPos.Distance(start) < 0.05f || wowPos.Distance(end) < 0.05f)
-            continue;
-
-        // Skip duplicates
-        if (!path.waypoints.empty() && path.waypoints.back().position.Distance(wowPos) < 0.05f)
-            continue;
-
-        path.waypoints.emplace_back(wowPos);
-        LOG_INFO("  WP" + std::to_string(path.waypoints.size()-1) + " recast: (" + std::to_string(recastPos.x) + ", " + std::to_string(recastPos.y) + ", " + std::to_string(recastPos.z) + ") -> wow: (" +
-                 std::to_string(wowPos.x) + ", " + std::to_string(wowPos.y) + ", " + std::to_string(wowPos.z) + ")");
     }
 
-    // Always push the exact end position as the final waypoint
-    path.waypoints.emplace_back(end);
+    delete filter;
 
-    // Apply human-like path adjustments for safety and natural movement
-    if (options.cornerCutting != 0.0f) {
-        LOG_INFO("Applying corner shaping with cornerCutting=" + std::to_string(options.cornerCutting));
-        HumanizePath(path, options);
-    }
+    // NO MANUAL PATH VALIDATION - trust the nav-mesh and automatic obstacle avoidance
+    path.waypoints = std::move(finalWaypoints);
+    path.result = PathResult::SUCCESS;
+    path.isComplete = true;
+    path.movementType = options.movementType;
 
-    // Compute initial path length after corner smoothing
+    // Calculate total path length
     path.totalLength = 0.0f;
     for (size_t i = 1; i < path.waypoints.size(); ++i) {
         path.totalLength += path.waypoints[i-1].position.Distance(path.waypoints[i].position);
     }
 
-    // After human-like corner shaping, apply wall padding if requested
-    if (options.wallPadding > 0.01f) {
-        LOG_INFO("Applying wall padding of " + std::to_string(options.wallPadding) + " yards to waypoints");
-        ApplyWallPadding(path, options.wallPadding);
-
-        // Recalculate path length again after padding
-        path.totalLength = 0.0f;
-        for (size_t i = 1; i < path.waypoints.size(); ++i) {
-            path.totalLength += path.waypoints[i-1].position.Distance(path.waypoints[i].position);
-        }
+    // AUTOMATIC PATH ENHANCEMENT - no manual controls needed
+    if (options.smoothPath) {
+        HumanizePath(path, options);
     }
 
-    // Apply elevation smoothing to avoid steep terrain if requested
-    if (options.avoidSteepTerrain) {
-        LOG_INFO("Applying elevation smoothing with maxElevationChange=" + std::to_string(options.maxElevationChange) + " yards");
-        ApplyElevationSmoothing(path, options);
+    // Remove duplicate waypoints automatically
+    auto it = std::unique(path.waypoints.begin(), path.waypoints.end(), 
+        [](const Waypoint& a, const Waypoint& b) {
+            return a.position.Distance(b.position) < 0.1f; // Less than 0.1 yard difference
+        });
+    path.waypoints.erase(it, path.waypoints.end());
 
-        // Recalculate path length again after elevation smoothing
-        path.totalLength = 0.0f;
-        for (size_t i = 1; i < path.waypoints.size(); ++i) {
-            path.totalLength += path.waypoints[i-1].position.Distance(path.waypoints[i].position);
-        }
+    LOG_INFO("Final waypoint list (" + std::to_string(path.waypoints.size()) + " points):");
+    for (size_t i = 0; i < path.waypoints.size(); ++i) {
+        const Vector3& pos = path.waypoints[i].position;
+        LOG_INFO("  WP" + std::to_string(i) + ": (" + std::to_string(pos.x) + ", " + std::to_string(pos.y) + ", " + std::to_string(pos.z) + ")");
     }
 
     LOG_INFO("Successfully found path with " + std::to_string(path.waypoints.size()) + " waypoints. Total length: " + std::to_string(path.totalLength));
-    path.result = PathResult::SUCCESS;
-    return path.result;
+    return PathResult::SUCCESS;
 }
 
 bool NavigationManager::IsPositionValid(const Vector3& position, uint32_t mapId) {
@@ -877,13 +764,12 @@ Vector3 NavigationManager::GetClosestPoint(const Vector3& position, uint32_t map
 }
 
 Vector3 NavigationManager::WoWToRecast(const Vector3& wowPos) {
-    // TrinityCore coordinate mapping: WoW(x,y,z) -> Detour(y,z,x)
-    // This matches exactly how TrinityCore PathGenerator converts coordinates
+    // Mapping that matches our generated navmesh: WoW(x,y,z) -> Detour(y,z,x)
     return Vector3(wowPos.y, wowPos.z, wowPos.x);
 }
 
 Vector3 NavigationManager::RecastToWoW(const Vector3& recastPos) {
-    // Inverse of TrinityCore mapping: Detour(y,z,x) -> WoW(x,y,z)
+    // Inverse mapping: Detour(y,z,x) -> WoW(x,y,z)
     return Vector3(recastPos.z, recastPos.x, recastPos.y);
 }
 
@@ -990,6 +876,9 @@ void NavigationManager::HumanizePath(NavigationPath& path, const PathfindingOpti
 
 Vector3 NavigationManager::SmoothCorner(const Vector3& prev, const Vector3& current, const Vector3& next, float cornerFactor) {
     if (cornerFactor == 0.0f) return current;
+
+    // Search extents for navmesh projection (2 yards horizontal, 5 yards vertical)
+    const float extents[3] = {2.0f, 5.0f, 2.0f};
     
     // Calculate vectors to previous and next waypoints
     Vector3 toPrev = (prev - current).Normalized();
@@ -1015,7 +904,6 @@ Vector3 NavigationManager::SmoothCorner(const Vector3& prev, const Vector3& curr
             Vector3 recastPos = WoWToRecast(smoothedPos);
             dtPolyRef polyRef;
             float closestPoint[3];
-            float extents[3] = {2.0f, 5.0f, 2.0f};
             
             if (dtStatusSucceed(m_navMeshQuery->findNearestPoly(&recastPos.x, extents, m_filter, &polyRef, closestPoint))) {
                 return smoothedPos;
@@ -1044,7 +932,6 @@ Vector3 NavigationManager::SmoothCorner(const Vector3& prev, const Vector3& curr
             Vector3 recastPos = WoWToRecast(angularPos);
             dtPolyRef polyRef;
             float closestPoint[3];
-            float extents[3] = {2.0f, 5.0f, 2.0f};
             
             if (dtStatusSucceed(m_navMeshQuery->findNearestPoly(&recastPos.x, extents, m_filter, &polyRef, closestPoint))) {
                 return angularPos;
@@ -1311,208 +1198,92 @@ void NavigationManager::ApplyWallPadding(NavigationPath& path, float padding) {
         return;
     }
 
-    if (!m_vmapManager || !m_vmapManager->IsLoaded()) {
-        LOG_WARNING("ApplyWallPadding: VMapManager not available. Cannot apply wall padding.");
+    // We need the navmesh from the currently loaded map
+    if (m_loadedMaps.empty()) {
+        LOG_WARNING("ApplyWallPadding: No map loaded, cannot perform wall padding.");
+        return;
+    }
+    const dtNavMesh* navMesh = m_loadedMaps.begin()->second.navMesh;
+    if (!navMesh) {
+        LOG_WARNING("ApplyWallPadding: Current map has no valid navmesh.");
         return;
     }
 
-    // We need mapId from the calling context - for now, use 0 as default
-    // TODO: Pass mapId as parameter or store it in NavigationPath
-    uint32_t mapId = 0;
-
-    // Extents used when searching for polygons near a point
-    const float extents[3] = { 4.0f, 6.0f, 4.0f };
-    const int maxIterations = 5;
-
+    const float extents[3] = {2.0f, 4.0f, 2.0f}; // Search extents for findNearestPoly
+    const int maxIters = 6;
     int adjustedCount = 0;
-    
+
+    // Iterate all waypoints except the first and last, which are fixed start/end points
     for (size_t i = 1; i < path.waypoints.size() - 1; ++i) {
-        Vector3 waypoint = path.waypoints[i].position;
-        
-        // Find minimum wall distance in all directions using enhanced VMap system
-        float minWallDistance = GetMinWallDistance(waypoint, mapId, padding + 5.0f);
-        
-        LOG_INFO("ApplyWallPadding: WP" + std::to_string(i) + " at (" + 
-                 std::to_string(waypoint.x) + ", " + std::to_string(waypoint.y) + ", " + std::to_string(waypoint.z) + 
-                 ") minWallDistance=" + std::to_string(minWallDistance) + ", padding=" + std::to_string(padding));
+        Vector3 recastPos = WoWToRecast(path.waypoints[i].position);
+        bool moved = false;
 
-        if (minWallDistance < padding) {
-            Vector3 adjustedPos = waypoint;
-            bool adjusted = false;
-            
-            // Try to move the waypoint away from walls iteratively
-            for (int iteration = 0; iteration < maxIterations; ++iteration) {
-                // Find the direction to the nearest wall
-                Vector3 wallDirection = GetNearestWallDirection(adjustedPos, mapId, padding + 5.0f);
-                
-                if (wallDirection.x == 0.0f && wallDirection.y == 0.0f && wallDirection.z == 0.0f) {
-                    // No wall found or direction couldn't be determined
-                    break;
-                }
-                
-                // Move away from the wall by the required padding distance
-                float moveDistance = padding - minWallDistance + 0.5f; // Add small buffer
-                Vector3 moveVector = {
-                    -wallDirection.x * moveDistance,
-                    -wallDirection.y * moveDistance,
-                    0.0f // Keep Z unchanged for now
-                };
-                
-                Vector3 newPos = {
-                    adjustedPos.x + moveVector.x,
-                    adjustedPos.y + moveVector.y,
-                    adjustedPos.z + moveVector.z
-                };
-                
-                // Project the new position onto the navigation mesh
-                float nearestPt[3];
-                dtPolyRef nearestPoly;
-                dtStatus status = m_navMeshQuery->findNearestPoly(
-                    &newPos.x, extents, m_filter, &nearestPoly, nearestPt);
-                
-                if (dtStatusSucceed(status) && nearestPoly != 0) {
-                    // Try to move along the surface to the new position
-                    float resultPos[3];
-                    dtPolyRef visited[16];
-                    int visitedCount = 0;
-                    
-                    status = m_navMeshQuery->moveAlongSurface(
-                        nearestPoly, &adjustedPos.x, nearestPt, m_filter,
-                        resultPos, visited, &visitedCount, 16);
-                    
-                    if (dtStatusSucceed(status)) {
-                        adjustedPos = { resultPos[0], resultPos[1], resultPos[2] };
-                        
-                        // Check if we've improved the wall distance
-                        float newMinWallDistance = GetMinWallDistance(adjustedPos, mapId, padding + 5.0f);
-                        
-                        LOG_INFO("ApplyWallPadding: WP" + std::to_string(i) + " iteration " + std::to_string(iteration) + 
-                                 ": moved to (" + std::to_string(adjustedPos.x) + ", " + std::to_string(adjustedPos.y) + ", " + 
-                                 std::to_string(adjustedPos.z) + "), newMinWallDistance=" + std::to_string(newMinWallDistance));
-                        
-                        if (newMinWallDistance >= padding) {
-                            adjusted = true;
-                            break;
-                        }
-                        
-                        minWallDistance = newMinWallDistance;
-                    } else {
-                        LOG_WARNING("ApplyWallPadding: moveAlongSurface failed for WP" + std::to_string(i) + " iteration " + std::to_string(iteration));
-                        break;
-                    }
-                } else {
-                    LOG_WARNING("ApplyWallPadding: findNearestPoly failed for WP" + std::to_string(i) + " iteration " + std::to_string(iteration));
-                    break;
-                }
+        for (int iter = 0; iter < maxIters; ++iter) {
+            dtPolyRef polyRef;
+            float closest[3];
+            // Find the polygon under the current position
+            if (dtStatusFailed(m_navMeshQuery->findNearestPoly(&recastPos.x, extents, m_filter, &polyRef, closest)) || !polyRef)
+                break; // cannot project – abort
+
+            float hitDist = 0.0f;
+            float hitNormal[3];
+            // Check distance to the nearest wall on that polygon
+            if (dtStatusFailed(m_navMeshQuery->findDistanceToWall(polyRef, closest, padding + 0.1f, m_filter, &hitDist, nullptr, hitNormal)))
+                break; // error
+
+            // If we are far enough from the wall, we are done with this waypoint
+            if (hitDist >= padding)
+                break;
+
+            // We are too close. Push the point away from the wall, purely on the horizontal plane.
+            float push = (padding - hitDist) * 1.05f; // Small multiplier to ensure we clear the padding threshold
+            recastPos.x += hitNormal[0] * push;
+            recastPos.z += hitNormal[2] * push; // Only push on X and Z
+
+            // Now that we've moved the point horizontally, we MUST find its new height on the navmesh
+            // to prevent creating a steep, unnatural slope.
+            float newHeight = recastPos.y;
+            if (dtStatusSucceed(m_navMeshQuery->getPolyHeight(polyRef, &recastPos.x, &newHeight))) {
+                recastPos.y = newHeight;
             }
-            
-            if (adjusted) {
-                path.waypoints[i] = adjustedPos;
-                adjustedCount++;
-                LOG_INFO("ApplyWallPadding: Adjusted WP" + std::to_string(i) + " to (" + 
-                         std::to_string(adjustedPos.x) + ", " + std::to_string(adjustedPos.y) + ", " + std::to_string(adjustedPos.z) + ")");
-            } else {
-                LOG_WARNING("ApplyWallPadding: Failed to adjust WP" + std::to_string(i) + " after " + std::to_string(maxIterations) + " iterations");
-            }
-        } else {
-            LOG_INFO("ApplyWallPadding: WP" + std::to_string(i) + " has sufficient wall distance (" + 
-                     std::to_string(minWallDistance) + " >= " + std::to_string(padding) + "), skipping");
+
+            moved = true;
+        }
+
+        if (moved) {
+            path.waypoints[i].position = RecastToWoW(recastPos);
+            adjustedCount++;
         }
     }
-    
+
     if (adjustedCount > 0) {
-        LOG_INFO("ApplyWallPadding: Adjusted " + std::to_string(adjustedCount) + " waypoints for wall padding");
-    } else {
-        LOG_INFO("ApplyWallPadding: No waypoints needed adjustment");
+        LOG_INFO("ApplyWallPadding: Adjusted " + std::to_string(adjustedCount) + " waypoints for wall padding (target padding=" + std::to_string(padding) + ")");
     }
-}
-
-float NavigationManager::GetMinWallDistance(const Vector3& position, uint32_t mapId, float searchRadius) {
-    if (!m_vmapManager || !m_vmapManager->IsLoaded()) {
-        return searchRadius; // Return max distance if VMap not available
-    }
-    
-    float minDistance = searchRadius;
-    
-    // Cast rays in 8 directions around the point to find walls
-    const int numDirections = 8;
-    const float angleStep = 2.0f * M_PI / numDirections;
-    
-    for (int i = 0; i < numDirections; ++i) {
-        float angle = i * angleStep;
-        Vector3 direction = {
-            cos(angle),
-            sin(angle),
-            0.0f // Horizontal plane only
-        };
-        
-        // Use the enhanced VMapManager to get wall distance
-        float wallDistance = m_vmapManager->GetDistanceToWall(position, direction, searchRadius, mapId);
-        
-        if (wallDistance < minDistance) {
-            minDistance = wallDistance;
-        }
-    }
-    
-    return minDistance;
-}
-
-Vector3 NavigationManager::GetNearestWallDirection(const Vector3& position, uint32_t mapId, float searchRadius) {
-    if (!m_vmapManager || !m_vmapManager->IsLoaded()) {
-        return {0.0f, 0.0f, 0.0f}; // Return zero vector if VMap not available
-    }
-    
-    float nearestDistance = searchRadius;
-    Vector3 nearestDirection = {0.0f, 0.0f, 0.0f};
-    
-    // Cast rays in 8 directions around the point to find the nearest wall
-    const int numDirections = 8;
-    const float angleStep = 2.0f * M_PI / numDirections;
-    
-    for (int i = 0; i < numDirections; ++i) {
-        float angle = i * angleStep;
-        Vector3 direction = {
-            cos(angle),
-            sin(angle),
-            0.0f // Horizontal plane only
-        };
-        
-        // Use the enhanced VMapManager to get wall distance
-        float wallDistance = m_vmapManager->GetDistanceToWall(position, direction, searchRadius, mapId);
-        
-        if (wallDistance < nearestDistance) {
-            nearestDistance = wallDistance;
-            nearestDirection = direction; // Direction TO the wall
-        }
-    }
-    
-    return nearestDirection;
 }
 
 dtQueryFilter* NavigationManager::CreateCustomFilter(const PathfindingOptions& options) {
-    static float originalSteepCost = -1.0f;
-    static float originalWaterCost = -1.0f;
-    static float originalMagmaCost = -1.0f;
+    dtQueryFilter* filter = new dtQueryFilter();
+    
+    // AUTOMATIC TERRAIN-AWARE FILTERING - no manual controls needed
+    unsigned short includeFlags = NAV_GROUND | NAV_GROUND_STEEP;
+    unsigned short excludeFlags = NAV_WATER | NAV_MAGMA_SLIME;
 
-    if (originalSteepCost < 0.0f) {
-        originalSteepCost = m_filter->getAreaCost(NAV_AREA_GROUND_STEEP);
-        originalWaterCost = m_filter->getAreaCost(NAV_AREA_WATER);
-        originalMagmaCost = m_filter->getAreaCost(NAV_AREA_MAGMA_SLIME);
-    }
+    filter->setIncludeFlags(includeFlags);
+    filter->setExcludeFlags(excludeFlags);
 
-    if (options.avoidSteepTerrain) {
-        float steepCost = std::max(50.0f, options.steepTerrainCost);
-        m_filter->setAreaCost(NAV_AREA_GROUND_STEEP, steepCost);
-        m_filter->setAreaCost(NAV_AREA_WATER, 5.0f);
-        m_filter->setAreaCost(NAV_AREA_MAGMA_SLIME, 100.0f);
-        LOG_INFO("CreateCustomFilter: steepCost=" + std::to_string(steepCost) + ", waterCost=5, magmaCost=100");
-    } else {
-        m_filter->setAreaCost(NAV_AREA_GROUND_STEEP, originalSteepCost);
-        m_filter->setAreaCost(NAV_AREA_WATER, originalWaterCost);
-        m_filter->setAreaCost(NAV_AREA_MAGMA_SLIME, originalMagmaCost);
-    }
+    // AUTOMATIC AREA COSTS based on terrain analysis
+    float steepCost = options.avoidSteepTerrain ? options.steepTerrainCost : 250.0f; // Default heavy penalty for steep terrain
+    float waterCost = 5.0f;   // Light penalty for water when allowed
+    float magmaCost = 100.0f; // Heavy penalty for lava when allowed
 
-    return m_filter;
+    filter->setAreaCost(NAV_AREA_GROUND,        1.0f);      // Normal ground - preferred
+    filter->setAreaCost(NAV_AREA_GROUND_STEEP,  steepCost); // Steep terrain - automatically avoid hills
+    filter->setAreaCost(NAV_AREA_WATER,         waterCost); // Water - slight penalty
+    filter->setAreaCost(NAV_AREA_MAGMA_SLIME,   magmaCost); // Lava - heavy penalty
+
+    LOG_INFO("CreateCustomFilter: steepCost=" + std::to_string(steepCost) + ", waterCost=" + std::to_string(waterCost) + ", magmaCost=" + std::to_string(magmaCost));
+
+    return filter;
 }
 
 void NavigationManager::ApplyElevationSmoothing(NavigationPath& path, const PathfindingOptions& options) {
@@ -1651,6 +1422,120 @@ static void AnalyzeNavMeshTiles(const dtNavMesh* navMesh) {
     }
 
     LOG_INFO("NavMesh Analysis Complete: " + std::to_string(totalPolys) + " polygons across " + std::to_string(tileCount) + " tiles.");
+}
+
+bool NavigationManager::SegmentHitsObstacle(const Vector3& a, const Vector3& b, uint32_t mapId) {
+    // SIMPLIFIED OBSTACLE DETECTION - let nav-mesh handle most obstacle avoidance
+    // Only check for major issues that nav-mesh might miss
+    
+    if (!m_navMeshQuery || m_loadedMaps.empty()) {
+        return false;
+    }
+
+    const dtNavMesh* navMesh = m_loadedMaps.begin()->second.navMesh;
+    if (!navMesh) return false;
+
+    // Quick Detour raycast test for unwalkable edges
+    Vector3 rcA = WoWToRecast(a);
+    Vector3 rcB = WoWToRecast(b);
+    float ext[3] = {4.0f, 8.0f, 4.0f};
+    dtPolyRef startRef;
+    float closest[3];
+    
+    if (dtStatusFailed(m_navMeshQuery->findNearestPoly(&rcA.x, ext, m_filter, &startRef, closest)) || !startRef) {
+        return false; // Cannot project - assume no obstacle
+    }
+
+    dtRaycastHit hit;
+    memset(&hit, 0, sizeof(hit));
+    hit.t = 1.0f;
+    
+    dtStatus rs = m_navMeshQuery->raycast(startRef, &rcA.x, &rcB.x, m_filter, 0, &hit, 0);
+    if (dtStatusSucceed(rs) && hit.t < 1.0f) {
+        return true; // Detour found unwalkable edge
+    }
+
+    // OPTIONAL: VMap collision test for doodads/trees not in nav-mesh
+    if (m_vmapManager && m_vmapManager->IsLoaded()) {
+        return !m_vmapManager->IsInLineOfSight(a, b, mapId);
+    }
+
+    return false;
+}
+
+void NavigationManager::ValidatePath(NavigationPath& path) {
+    // MINIMAL PATH VALIDATION - trust the nav-mesh generation
+    // Only remove obviously invalid segments
+    if (path.waypoints.size() < 2) return;
+
+    std::vector<Waypoint> validWaypoints;
+    validWaypoints.push_back(path.waypoints[0]); // Always keep start
+
+    for (size_t i = 1; i < path.waypoints.size(); ++i) {
+        Vector3 current = path.waypoints[i].position;
+        Vector3 previous = validWaypoints.back().position;
+        
+        // Only reject segments that are clearly invalid
+        float distance = previous.Distance(current);
+        if (distance > 0.1f && distance < 100.0f) { // Reasonable distance range
+            validWaypoints.push_back(path.waypoints[i]);
+        }
+    }
+
+    path.waypoints = std::move(validWaypoints);
+}
+
+Vector3 NavigationManager::FindSafePosition(const Vector3& from, const Vector3& to, uint32_t mapId) {
+    // Try to find a safe position when VMap detects collision
+    Vector3 direction = to - from;
+    float distance = direction.Length();
+    
+    if (distance < 0.1f) {
+        return to; // Too close, just return target
+    }
+    
+    direction = direction * (1.0f / distance); // Normalize
+    
+    // Try positions at different distances along the path
+    for (float d = distance * 0.8f; d > distance * 0.2f; d -= distance * 0.1f) {
+        Vector3 testPos = from + direction * d;
+        
+        // Check if this position is safe
+        if (!m_vmapManager || m_vmapManager->IsInLineOfSight(from, testPos, mapId)) {
+            return testPos;
+        }
+    }
+    
+    // If no safe position found along the direct path, try slight lateral offsets
+    Vector3 perpendicular(-direction.z, direction.y, direction.x); // Perpendicular vector
+    
+    for (float offset = 1.0f; offset <= 3.0f; offset += 1.0f) {
+        for (int side = -1; side <= 1; side += 2) {
+            Vector3 testPos = to + perpendicular * (offset * side);
+            
+            if (!m_vmapManager || m_vmapManager->IsInLineOfSight(from, testPos, mapId)) {
+                return testPos;
+            }
+        }
+    }
+    
+    // Last resort: return a position 80% of the way to target
+    return from + direction * (distance * 0.8f);
+}
+
+std::pair<int, int> NavigationManager::GetTileFromPosition(const Vector3& position) {
+    // WoW coordinate system: Each tile is 533.33 yards (533.33333 units)
+    // Tile coordinates are calculated from world position
+    const float TILE_SIZE = 533.33333f;
+    
+    int tileX = static_cast<int>(std::floor((32.0f - position.x / TILE_SIZE)));
+    int tileY = static_cast<int>(std::floor((32.0f - position.y / TILE_SIZE)));
+    
+    // Clamp to valid tile range (0-63)
+    tileX = std::max(0, std::min(63, tileX));
+    tileY = std::max(0, std::min(63, tileY));
+    
+    return std::make_pair(tileX, tileY);
 }
 
 } // namespace Navigation 

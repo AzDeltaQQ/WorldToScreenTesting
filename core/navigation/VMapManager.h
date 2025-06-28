@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <vector>
 #include <cstdint>
+#include "../../TrinityCore-3.3.5/src/common/Collision/Management/VMapManager2.h"
 
 namespace Navigation {
 
@@ -24,7 +25,7 @@ namespace Navigation {
         ~VMapManager();
 
         // Initialize VMap system with maps directory
-        bool Initialize(const std::string& mapsDirectory);
+        bool Initialize(const std::string& mmapsDirectory);
         void Shutdown();
 
         // Load/unload map tiles
@@ -41,8 +42,14 @@ namespace Navigation {
         bool IsLoaded() const { return m_isInitialized; }
         uint32_t GetLoadedTileCount() const { return m_loadedTileCount; }
 
+        bool IsPointWalkable(const Vector3& point, uint32_t mapId = 0) const;
+        bool HasTerrainObstacle(const Vector3& point, uint32_t mapId = 0) const;
+        float GetGroundHeight(const Vector3& point, uint32_t mapId = 0) const;
+
     private:
-        std::string m_mapsDirectory;
+        std::string m_mmapsDirectory;            // .../maps/mmaps/
+        std::string m_vmapsDirectory;            // .../maps/vmaps/
+        std::unique_ptr<VMAP::VMapManager2> m_tcVMapMgr;
         bool m_isInitialized = false;
         uint32_t m_loadedTileCount = 0;
         
@@ -52,11 +59,9 @@ namespace Navigation {
         // Helper functions
         std::pair<uint32_t, uint32_t> GetTileCoordinates(const Vector3& position);
         uint64_t GetTileKey(uint32_t tileX, uint32_t tileY);
+
+        // Load and validate individual VMap files (helper)
         bool LoadVMapFile(const std::string& filePath);
-        
-        // Simplified collision detection
-        bool CheckLineOfSightSimple(const Vector3& start, const Vector3& end, uint32_t mapId);
-        float GetWallDistanceSimple(const Vector3& position, const Vector3& direction, float maxDistance, uint32_t mapId);
     };
 
 } // namespace Navigation 

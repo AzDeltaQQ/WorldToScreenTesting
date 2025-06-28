@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "PrecompiledHeaders/commonPCH.h"
 #include "DynamicTree.h"
 #include "BoundingIntervalHierarchyWrapper.h"
 #include "GameObjectModel.h"
@@ -28,6 +29,10 @@
 #include <G3D/AABox.h>
 #include <G3D/Ray.h>
 #include <G3D/Vector3.h>
+
+#include <vector>
+
+#include "Common.h"
 
 using VMAP::ModelInstance;
 

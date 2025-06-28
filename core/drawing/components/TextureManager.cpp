@@ -781,7 +781,8 @@ void TextureManager::UpdateTextureVisibility() {
         if (texture.isVisible) {
             texture.screenPos = screenPos;
             if (m_settings.onlyShowInRange) {
-                float distance = D3DXVec3Length(&(D3DXVECTOR3(texture.worldPos - playerPos)));
+                D3DXVECTOR3 diff = texture.worldPos - playerPos;
+                float distance = D3DXVec3Length(&diff);
                 if (distance > m_settings.maxRenderDistance) {
                     texture.isVisible = false;
                 }

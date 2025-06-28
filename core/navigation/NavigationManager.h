@@ -71,10 +71,10 @@ public:
     std::vector<VMapCollisionResult> GetNearbyWalls(const Vector3& center, float radius = 10.0f, uint32_t mapId = 0);
 
     // Coordinate conversion utilities
-    // TrinityCore MMAP convention:
-    //   recastX = -WoW_Y
+    // Mapping that matches our generated navmesh:
+    //   recastX =  WoW_Y
     //   recastY =  WoW_Z
-    //   recastZ = -WoW_X
+    //   recastZ =  WoW_X
     static Vector3 WoWToRecast(const Vector3& wowPos);
     static Vector3 RecastToWoW(const Vector3& recastPos);
 
@@ -96,9 +96,22 @@ public:
     // Directory access
     std::string GetMapsDirectory() const { return m_mapsDirectory; }
 
-    // Helper methods for wall distance detection
-    float GetMinWallDistance(const Vector3& position, uint32_t mapId, float searchRadius);
-    Vector3 GetNearestWallDirection(const Vector3& position, uint32_t mapId, float searchRadius);
+    // Humanization methods for natural pathfinding
+    void HumanizePath(NavigationPath& path, const PathfindingOptions& options);
+    Vector3 SmoothCorner(const Vector3& prev, const Vector3& current, const Vector3& next, float cornerFactor);
+
+    // Push waypoints away from nearby walls by a minimum padding distance
+    void ApplyWallPadding(NavigationPath& path, float padding);
+
+    // VMap-based validation to split segments that cross collision geometry
+    bool SegmentHitsObstacle(const Vector3& a, const Vector3& b, uint32_t mapId = 0);
+    void ValidatePath(NavigationPath& path);
+    Vector3 FindSafePosition(const Vector3& from, const Vector3& to, uint32_t mapId = 0);
+    std::pair<int, int> GetTileFromPosition(const Vector3& position);
+
+    // Internal implementation methods
+    dtQueryFilter* CreateCustomFilter(const PathfindingOptions& options);
+    void ApplyElevationSmoothing(NavigationPath& path, const PathfindingOptions& options);
 
 private:
     NavigationManager();
@@ -135,17 +148,6 @@ private:
 
     // Error handling
     std::string m_lastError;
-
-    // Humanization methods for natural pathfinding
-    void HumanizePath(NavigationPath& path, const PathfindingOptions& options);
-    Vector3 SmoothCorner(const Vector3& prev, const Vector3& current, const Vector3& next, float cornerFactor);
-
-    // Push waypoints away from nearby walls by a minimum padding distance
-    void ApplyWallPadding(NavigationPath& path, float padding);
-
-    // Internal implementation methods
-    dtQueryFilter* CreateCustomFilter(const PathfindingOptions& options);
-    void ApplyElevationSmoothing(NavigationPath& path, const PathfindingOptions& options);
 };
 
 // Convenience macros
