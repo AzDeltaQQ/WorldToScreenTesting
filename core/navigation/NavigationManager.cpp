@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <Windows.h>
 #include <unordered_map>
+#include <cfloat>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -149,6 +150,10 @@ std::string FindMapsDirectory(HMODULE hModule) {
 
 namespace Navigation {
 
+// Forward declarations for static utility functions
+static void MarkSteepPolys(dtNavMesh* navMesh, float heightThreshold);
+static void AnalyzeNavMeshTiles(const dtNavMesh* navMesh);
+
 HMODULE NavigationManager::s_hModule = NULL;
 
 void NavigationManager::SetModuleHandle(HMODULE hModule) {
@@ -245,9 +250,9 @@ bool NavigationManager::Initialize() {
     m_filter->setIncludeFlags(includeFlags);
     m_filter->setExcludeFlags(excludeFlags);
 
-    // Area costs - prefer normal ground but allow steep terrain
+    // Area costs - prefer normal ground, heavily penalize steep terrain by default
     m_filter->setAreaCost(NAV_AREA_GROUND,        1.0f);   // Normal ground - preferred
-    m_filter->setAreaCost(NAV_AREA_GROUND_STEEP,  2.0f);   // Steep terrain - slightly more expensive but allowed
+    m_filter->setAreaCost(NAV_AREA_GROUND_STEEP,  10.0f);  // Steep terrain - heavily penalized to avoid hills
     m_filter->setAreaCost(NAV_AREA_WATER,         100.0f); // Water - heavily discourage (though excluded)
     m_filter->setAreaCost(NAV_AREA_MAGMA_SLIME,  100.0f);  // Lava/slime - heavily discourage (though excluded)
     
@@ -315,6 +320,15 @@ void NavigationManager::UnloadMap(uint32_t mapId) {
     }
 }
 
+void NavigationManager::UnloadAllMaps() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    
+    if (!m_loadedMaps.empty()) {
+        LOG_INFO("Unloading all " + std::to_string(m_loadedMaps.size()) + " loaded maps");
+        m_loadedMaps.clear();
+    }
+}
+
 uint32_t NavigationManager::GetCurrentMapId() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_loadedMaps.empty()) {
@@ -348,6 +362,12 @@ bool NavigationManager::LoadMapNavMesh(int mapId) {
     if (m_loadedMaps.find(mapId) != m_loadedMaps.end()) {
         LOG_INFO("Navigation mesh for map " + std::to_string(mapId) + " already loaded");
         return true;
+    }
+    
+    // Auto-unload any previously loaded maps to ensure only one map is loaded at a time
+    if (!m_loadedMaps.empty()) {
+        LOG_INFO("Auto-unloading " + std::to_string(m_loadedMaps.size()) + " previously loaded maps before loading map " + std::to_string(mapId));
+        m_loadedMaps.clear();
     }
 
     // Build the mmap file path using std::filesystem for robustness
@@ -557,6 +577,13 @@ bool NavigationManager::LoadMapNavMesh(int mapId) {
     m_loadedMaps[mapId] = std::move(mapData);
 
     LOG_INFO("Successfully loaded navigation mesh for map " + std::to_string(mapId));
+
+    // Post-process the mesh to mark steep areas.
+    MarkSteepPolys(navMesh, 1.5f);
+
+    // Analyze loaded tiles for debugging.
+    AnalyzeNavMeshTiles(navMesh);
+
     return true;
 }
 
@@ -609,6 +636,9 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
     LOG_INFO("  recastStart: (" + std::to_string(recastStart.x) + ", " + std::to_string(recastStart.y) + ", " + std::to_string(recastStart.z) + ")");
     LOG_INFO("  recastEnd  : (" + std::to_string(recastEnd.x)   + ", " + std::to_string(recastEnd.y)   + ", " + std::to_string(recastEnd.z)   + ")");
 
+    // Configure filter based on pathfinding options for terrain avoidance
+    dtQueryFilter* filter = CreateCustomFilter(options);
+
     auto FindNearestPoly = [&](const Vector3& pos, dtPolyRef& outRef, float outPt[3], const char* tag) -> bool {
         // Debug: Check what tiles exist around this position
         LOG_INFO(std::string("    Searching for ") + tag + " polygon at: (" + std::to_string(pos.x) + ", " + std::to_string(pos.y) + ", " + std::to_string(pos.z) + ")");
@@ -618,7 +648,7 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
         float extents[3] = {10.0f, 15.0f, 10.0f};    // Larger initial search area
         float closestPoint[3] = {0.0f, 0.0f, 0.0f};
         
-        dtStatus res = m_navMeshQuery->findNearestPoly(&pos.x, extents, m_filter, &outRef, closestPoint);
+        dtStatus res = m_navMeshQuery->findNearestPoly(&pos.x, extents, filter, &outRef, closestPoint);
         if (dtStatusSucceed(res) && outRef != 0) {
             float distance = dtVdist(closestPoint, &pos.x);
             if (distance <= 20.0f) { // More generous distance validation
@@ -638,7 +668,7 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
         extents[0] = 50.0f; // Horizontal
         extents[1] = 100.0f; // Vertical - very generous for elevation differences
         extents[2] = 50.0f; // Horizontal
-        res = m_navMeshQuery->findNearestPoly(&pos.x, extents, m_filter, &outRef, closestPoint);
+        res = m_navMeshQuery->findNearestPoly(&pos.x, extents, filter, &outRef, closestPoint);
         if (dtStatusSucceed(res) && outRef != 0) {
             float distance = dtVdist(closestPoint, &pos.x);
             if (distance <= 100.0f) { // Very lenient for fallback search
@@ -681,7 +711,7 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
     int polyPathCount = 0;
 
     dtStatus pathStatus = m_navMeshQuery->findPath(startPoly, endPoly, nearestStartPt, nearestEndPt,
-                                                   m_filter, polyPath.data(), &polyPathCount, MAX_POLYS);
+                                                   filter, polyPath.data(), &polyPathCount, MAX_POLYS);
 
     if (dtStatusFailed(pathStatus) || polyPathCount == 0) {
         m_lastError = "FindPath failed: Could not create a path between the points.";
@@ -705,6 +735,34 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
         for (int i = 5; i < polyPathCount; ++i) {
             LOG_INFO("    Poly[" + std::to_string(i) + "]: " + std::to_string(polyPath[i]));
         }
+    }
+    
+    // Analyze area types in the polygon path to understand terrain usage
+    std::map<unsigned char, int> areaTypeCounts;
+    const dtNavMesh* attachedNavMesh = m_navMeshQuery->getAttachedNavMesh();
+    for (int i = 0; i < polyPathCount; ++i) {
+        // Get the tile and polygon from the polygon reference
+        const dtMeshTile* tile = 0;
+        const dtPoly* poly = 0;
+        if (dtStatusSucceed(attachedNavMesh->getTileAndPolyByRef(polyPath[i], &tile, &poly))) {
+            unsigned char areaType = poly->getArea();
+            areaTypeCounts[areaType]++;
+        }
+    }
+    
+    LOG_INFO("  Area types in polygon path:");
+    for (const auto& pair : areaTypeCounts) {
+        std::string areaName;
+        switch (pair.first) {
+            case NAV_AREA_GROUND: areaName = "GROUND"; break;
+            case NAV_AREA_GROUND_STEEP: areaName = "GROUND_STEEP"; break;
+            case NAV_AREA_WATER: areaName = "WATER"; break;
+            case NAV_AREA_MAGMA_SLIME: areaName = "MAGMA_SLIME"; break;
+            default: areaName = "UNKNOWN(" + std::to_string(pair.first) + ")"; break;
+        }
+        float areaCost = filter->getAreaCost(pair.first);
+        LOG_INFO("    " + areaName + " (area " + std::to_string(pair.first) + "): " + 
+                 std::to_string(pair.second) + " polygons, cost=" + std::to_string(areaCost));
     }
 
     // ----- straight path -----
@@ -791,6 +849,18 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
         }
     }
 
+    // Apply elevation smoothing to avoid steep terrain if requested
+    if (options.avoidSteepTerrain) {
+        LOG_INFO("Applying elevation smoothing with maxElevationChange=" + std::to_string(options.maxElevationChange) + " yards");
+        ApplyElevationSmoothing(path, options);
+
+        // Recalculate path length again after elevation smoothing
+        path.totalLength = 0.0f;
+        for (size_t i = 1; i < path.waypoints.size(); ++i) {
+            path.totalLength += path.waypoints[i-1].position.Distance(path.waypoints[i].position);
+        }
+    }
+
     LOG_INFO("Successfully found path with " + std::to_string(path.waypoints.size()) + " waypoints. Total length: " + std::to_string(path.totalLength));
     path.result = PathResult::SUCCESS;
     return path.result;
@@ -856,9 +926,7 @@ NavMeshStats NavigationManager::GetNavMeshStats(uint32_t mapId) const {
 }
 
 std::string NavigationManager::GetMMapFilePath(uint32_t mapId) const {
-    std::ostringstream oss;
-    oss << m_mapsDirectory << "/" << std::setfill('0') << std::setw(3) << mapId << ".mmap";
-    return oss.str();
+    return (std::filesystem::path(m_mapsDirectory) / (std::to_string(mapId) + ".mmap")).string();
 }
 
 bool NavigationManager::LoadMMapFile(const std::string& filePath, uint32_t mapId) {
@@ -1054,6 +1122,190 @@ std::vector<VMapCollisionResult> NavigationManager::GetNearbyWalls(const Vector3
     return m_vmapManager->GetNearbyWalls(center, radius, mapId);
 }
 
+std::string NavigationManager::GetMapName(uint32_t mapId) {
+    static const std::unordered_map<uint32_t, std::string> mapNames = {
+        {0, "Eastern Kingdom"},
+        {1, "Kalimdor"},
+        {13, "Testing"},
+        {25, "Scott Test"},
+        {30, "Alterac Valley"},
+        {33, "Shadowfang Keep"},
+        {34, "Stormwind Stockade"},
+        {35, "<unused>StormwindPrison"},
+        {36, "Deadmines"},
+        {37, "Azshara Crater"},
+        {42, "Collin's Test"},
+        {43, "Wailing Caverns"},
+        {44, "<unused> Monastery"},
+        {47, "Razorfen Kraul"},
+        {48, "Blackfathom Deeps"},
+        {70, "Uldaman"},
+        {90, "Gnomeregan"},
+        {109, "Sunken Temple"},
+        {129, "Razorfen Downs"},
+        {169, "Emerald Dream"},
+        {189, "Scarlet Monastery"},
+        {209, "Zul'Farrak"},
+        {229, "Blackrock Spire"},
+        {230, "Blackrock Depths"},
+        {249, "Onyxia's Lair"},
+        {269, "Opening of the Dark Portal"},
+        {289, "Scholomance"},
+        {309, "Zul'Gurub"},
+        {329, "Stratholme"},
+        {349, "Maraudon"},
+        {369, "Deeprun Tram"},
+        {389, "Ragefire Chasm"},
+        {409, "Molten Core"},
+        {429, "Dire Maul"},
+        {449, "Alliance PVP Barracks"},
+        {450, "Horde PVP Barracks"},
+        {451, "Development Land"},
+        {469, "Blackwing Lair"},
+        {489, "Warsong Gulch"},
+        {509, "Ruins of Ahn'Qiraj"},
+        {529, "Arathi Basin"},
+        {530, "Outland"},
+        {531, "Ahn'Qiraj Temple"},
+        {532, "Karazhan"},
+        {533, "Naxxramas"},
+        {534, "The Battle for Mount Hyjal"},
+        {540, "Hellfire Citadel: The Shattered Halls"},
+        {542, "Hellfire Citadel: The Blood Furnace"},
+        {543, "Hellfire Citadel: Ramparts"},
+        {544, "Magtheridon's Lair"},
+        {545, "Coilfang: The Steamvault"},
+        {546, "Coilfang: The Underbog"},
+        {547, "Coilfang: The Slave Pens"},
+        {548, "Coilfang: Serpentshrine Cavern"},
+        {550, "Tempest Keep"},
+        {552, "Tempest Keep: The Arcatraz"},
+        {553, "Tempest Keep: The Botanica"},
+        {554, "Tempest Keep: The Mechanar"},
+        {555, "Auchindoun: Shadow Labyrinth"},
+        {556, "Auchindoun: Sethekk Halls"},
+        {557, "Auchindoun: Mana-Tombs"},
+        {558, "Auchindoun: Auchenai Crypts"},
+        {559, "Nagrand Arena"},
+        {560, "The Escape From Durnholde"},
+        {562, "Blade's Edge Arena"},
+        {564, "Black Temple"},
+        {565, "Gruul's Lair"},
+        {566, "Eye of the Storm"},
+        {568, "Zul'Aman"},
+        {571, "Northrend"},
+        {572, "Ruins of Lordaeron"},
+        {573, "ExteriorTest"},
+        {574, "Utgarde Keep"},
+        {575, "Utgarde Pinnacle"},
+        {576, "The Nexus"},
+        {578, "The Oculus"},
+        {580, "The Sunwell"},
+        {582, "Transport: Rut'theran to Auberdine"},
+        {584, "Transport: Menethil to Theramore"},
+        {585, "Magister's Terrace"},
+        {586, "Transport: Exodar to Auberdine"},
+        {587, "Transport: Feathermoon Ferry"},
+        {588, "Transport: Menethil to Auberdine"},
+        {589, "Transport: Orgrimmar to Grom'Gol"},
+        {590, "Transport: Grom'Gol to Undercity"},
+        {591, "Transport: Undercity to Orgrimmar"},
+        {592, "Transport: Borean Tundra Test"},
+        {593, "Transport: Booty Bay to Ratchet"},
+        {594, "Transport: Howling Fjord Sister Mercy (Quest)"},
+        {595, "The Culling of Stratholme"},
+        {596, "Transport: Naglfar"},
+        {597, "Craig Test"},
+        {598, "Sunwell Fix (Unused)"},
+        {599, "Halls of Stone"},
+        {600, "Drak'Tharon Keep"},
+        {601, "Azjol-Nerub"},
+        {602, "Halls of Lightning"},
+        {603, "Ulduar"},
+        {604, "Gundrak"},
+        {605, "Development Land (non-weighted textures)"},
+        {606, "QA and DVD"},
+        {607, "Strand of the Ancients"},
+        {608, "Violet Hold"},
+        {609, "Ebon Hold"},
+        {610, "Transport: Tirisfal to Vengeance Landing"},
+        {612, "Transport: Menethil to Valgarde"},
+        {613, "Transport: Orgrimmar to Warsong Hold"},
+        {614, "Transport: Stormwind to Valiance Keep"},
+        {615, "The Obsidian Sanctum"},
+        {616, "The Eye of Eternity"},
+        {617, "Dalaran Sewers"},
+        {618, "The Ring of Valor"},
+        {619, "Ahn'kahet: The Old Kingdom"},
+        {620, "Transport: Moa'ki to Unu'pe"},
+        {621, "Transport: Moa'ki to Kamagua"},
+        {622, "Transport: Orgrim's Hammer"},
+        {623, "Transport: The Skybreaker"},
+        {624, "Vault of Archavon"},
+        {628, "Isle of Conquest"},
+        {631, "Icecrown Citadel"},
+        {632, "The Forge of Souls"},
+        {641, "Transport: Alliance Airship BG"},
+        {642, "Transport: HordeAirshipBG"},
+        {647, "Transport: Orgrimmar to Thunder Bluff"},
+        {649, "Trial of the Crusader"},
+        {650, "Trial of the Champion"},
+        {658, "Pit of Saron"},
+        {668, "Halls of Reflection"},
+        {672, "Transport: The Skybreaker (Icecrown Citadel Raid)"},
+        {673, "Transport: Orgrim's Hammer (Icecrown Citadel Raid)"},
+        {712, "Transport: The Skybreaker (IC Dungeon)"},
+        {713, "Transport: Orgrim's Hammer (IC Dungeon)"},
+        {718, "Trasnport: The Mighty Wind (Icecrown Citadel Raid)"},
+        {723, "Stormwind"},
+        {724, "The Ruby Sanctum"}
+    };
+    
+    auto it = mapNames.find(mapId);
+    if (it != mapNames.end()) {
+        return it->second;
+    }
+    return "Unknown Map";
+}
+
+std::vector<std::pair<uint32_t, std::string>> NavigationManager::GetAllMapNames() {
+    std::vector<std::pair<uint32_t, std::string>> result;
+    
+    // Get all available .mmap files from the maps directory
+    NavigationManager& instance = Instance();
+    std::string mapsDir = instance.GetMapsDirectory();
+    if (mapsDir.empty()) {
+        return result;
+    }
+    
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(mapsDir)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".mmap") {
+                std::string filename = entry.path().stem().string();
+                if (filename.length() >= 3) {
+                    try {
+                        uint32_t mapId = static_cast<uint32_t>(std::stoi(filename.substr(0, 3)));
+                        std::string mapName = GetMapName(mapId);
+                        result.emplace_back(mapId, mapName);
+                    } catch (const std::invalid_argument&) {
+                        // Skip invalid filenames
+                    }
+                }
+            }
+        }
+        
+        // Sort by map ID
+        std::sort(result.begin(), result.end(), 
+                 [](const std::pair<uint32_t, std::string>& a, const std::pair<uint32_t, std::string>& b) {
+                     return a.first < b.first;
+                 });
+    } catch (const std::filesystem::filesystem_error& e) {
+        LOG_ERROR("Error scanning maps directory: " + std::string(e.what()));
+    }
+    
+    return result;
+}
+
 void NavigationManager::ApplyWallPadding(NavigationPath& path, float padding) {
     if (!m_navMeshQuery || path.waypoints.size() < 2 || padding <= 0.01f) {
         return;
@@ -1235,6 +1487,170 @@ Vector3 NavigationManager::GetNearestWallDirection(const Vector3& position, uint
     }
     
     return nearestDirection;
+}
+
+dtQueryFilter* NavigationManager::CreateCustomFilter(const PathfindingOptions& options) {
+    static float originalSteepCost = -1.0f;
+    static float originalWaterCost = -1.0f;
+    static float originalMagmaCost = -1.0f;
+
+    if (originalSteepCost < 0.0f) {
+        originalSteepCost = m_filter->getAreaCost(NAV_AREA_GROUND_STEEP);
+        originalWaterCost = m_filter->getAreaCost(NAV_AREA_WATER);
+        originalMagmaCost = m_filter->getAreaCost(NAV_AREA_MAGMA_SLIME);
+    }
+
+    if (options.avoidSteepTerrain) {
+        float steepCost = std::max(50.0f, options.steepTerrainCost);
+        m_filter->setAreaCost(NAV_AREA_GROUND_STEEP, steepCost);
+        m_filter->setAreaCost(NAV_AREA_WATER, 5.0f);
+        m_filter->setAreaCost(NAV_AREA_MAGMA_SLIME, 100.0f);
+        LOG_INFO("CreateCustomFilter: steepCost=" + std::to_string(steepCost) + ", waterCost=5, magmaCost=100");
+    } else {
+        m_filter->setAreaCost(NAV_AREA_GROUND_STEEP, originalSteepCost);
+        m_filter->setAreaCost(NAV_AREA_WATER, originalWaterCost);
+        m_filter->setAreaCost(NAV_AREA_MAGMA_SLIME, originalMagmaCost);
+    }
+
+    return m_filter;
+}
+
+void NavigationManager::ApplyElevationSmoothing(NavigationPath& path, const PathfindingOptions& options) {
+    if (path.waypoints.size() < 3) {
+        return; // Need at least 3 waypoints to smooth
+    }
+    
+    LOG_INFO("ApplyElevationSmoothing: Processing " + std::to_string(path.waypoints.size()) + " waypoints");
+    
+    std::vector<Waypoint> smoothedWaypoints;
+    smoothedWaypoints.reserve(path.waypoints.size() * 2); // May add intermediate points
+    
+    // Always keep the start waypoint
+    smoothedWaypoints.push_back(path.waypoints[0]);
+    
+    for (size_t i = 1; i < path.waypoints.size(); ++i) {
+        const Vector3& prevPos = smoothedWaypoints.back().position;
+        const Vector3& currentPos = path.waypoints[i].position;
+        
+        float elevationChange = std::abs(currentPos.z - prevPos.z);
+        float horizontalDistance = std::sqrt(
+            (currentPos.x - prevPos.x) * (currentPos.x - prevPos.x) + 
+            (currentPos.y - prevPos.y) * (currentPos.y - prevPos.y)
+        );
+        
+        // Calculate slope percentage
+        float slope = (horizontalDistance > 0.1f) ? (elevationChange / horizontalDistance) * 100.0f : 0.0f;
+        
+        LOG_INFO("ApplyElevationSmoothing: WP" + std::to_string(i) + " elevation change: " + 
+                 std::to_string(elevationChange) + "y, horizontal: " + std::to_string(horizontalDistance) + 
+                 "y, slope: " + std::to_string(slope) + "%");
+        
+        // If elevation change is too steep, try to add intermediate waypoints
+        if (elevationChange > options.maxElevationChange && horizontalDistance > 2.0f) {
+            LOG_INFO("ApplyElevationSmoothing: Steep elevation change detected, adding intermediate waypoints");
+            
+            // Calculate how many intermediate points we need
+            int numIntermediatePoints = static_cast<int>(std::ceil(elevationChange / options.maxElevationChange)) - 1;
+            numIntermediatePoints = std::min(numIntermediatePoints, 5); // Limit to max 5 intermediate points
+            
+            // Add intermediate waypoints with gradual elevation changes
+            for (int j = 1; j <= numIntermediatePoints; ++j) {
+                float t = static_cast<float>(j) / static_cast<float>(numIntermediatePoints + 1);
+                
+                Vector3 intermediatePos = {
+                    prevPos.x + t * (currentPos.x - prevPos.x),
+                    prevPos.y + t * (currentPos.y - prevPos.y),
+                    prevPos.z + t * (currentPos.z - prevPos.z)
+                };
+                
+                // Try to project this intermediate point onto the navmesh
+                Vector3 recastPos = WoWToRecast(intermediatePos);
+                dtPolyRef polyRef;
+                float closestPoint[3];
+                float extents[3] = {5.0f, 10.0f, 5.0f}; // Generous search area
+                
+                dtStatus status = m_navMeshQuery->findNearestPoly(&recastPos.x, extents, m_filter, &polyRef, closestPoint);
+                if (dtStatusSucceed(status) && polyRef != 0) {
+                    Vector3 projectedPos = RecastToWoW(Vector3(closestPoint[0], closestPoint[1], closestPoint[2]));
+                    smoothedWaypoints.emplace_back(projectedPos);
+                    
+                    LOG_INFO("ApplyElevationSmoothing: Added intermediate WP at (" + 
+                             std::to_string(projectedPos.x) + ", " + std::to_string(projectedPos.y) + 
+                             ", " + std::to_string(projectedPos.z) + ")");
+                } else {
+                    LOG_WARNING("ApplyElevationSmoothing: Failed to project intermediate point onto navmesh");
+                }
+            }
+        }
+        
+        // Add the current waypoint
+        smoothedWaypoints.push_back(path.waypoints[i]);
+    }
+    
+    // Replace the original waypoints
+    path.waypoints = std::move(smoothedWaypoints);
+    
+    LOG_INFO("ApplyElevationSmoothing: Completed, final waypoint count: " + std::to_string(path.waypoints.size()));
+}
+
+static void MarkSteepPolys(dtNavMesh* navMesh, float heightThreshold) {
+    if (!navMesh) return;
+    int changed = 0;
+    
+    const dtNavMesh* constNavMesh = navMesh;
+
+    for (int i = 0; i < constNavMesh->getMaxTiles(); ++i) {
+        const dtMeshTile* tile = constNavMesh->getTile(i);
+        if (!tile || !tile->header) continue;
+        
+        dtPolyRef base = constNavMesh->getPolyRefBase(tile);
+        
+        for (int j = 0; j < tile->header->polyCount; ++j) {
+            const dtPoly* p = &tile->polys[j];
+            
+            if (p->getType() == DT_POLYTYPE_GROUND) {
+                float minY = FLT_MAX, maxY = -FLT_MAX;
+                for (int k = 0; k < p->vertCount; ++k) {
+                    const float* v = &tile->verts[p->verts[k] * 3];
+                    minY = std::min(minY, v[1]);
+                    maxY = std::max(maxY, v[1]);
+                }
+                
+                if ((maxY - minY) > heightThreshold) {
+                    dtPolyRef polyRef = base | (dtPolyRef)j;
+                    // Use the public setPolyArea function to modify the area flag
+                    navMesh->setPolyArea(polyRef, NAV_AREA_GROUND_STEEP);
+                    changed++;
+                }
+            }
+        }
+    }
+    
+    if (changed > 0) {
+        LOG_INFO("MarkSteepPolys: Marked " + std::to_string(changed) + " polygons as steep.");
+    } else {
+        LOG_INFO("MarkSteepPolys: No polygons met steepness threshold of " + std::to_string(heightThreshold) + "y.");
+    }
+}
+
+static void AnalyzeNavMeshTiles(const dtNavMesh* navMesh) {
+    if (!navMesh) return;
+    int totalPolys = 0;
+    int totalVerts = 0;
+    int tileCount = 0;
+    size_t memory = 0;
+
+    for (int i = 0; i < navMesh->getMaxTiles(); ++i) {
+        const dtMeshTile* tile = navMesh->getTile(i);
+        if (!tile || !tile->header) continue;
+
+        tileCount++;
+        totalPolys += tile->header->polyCount;
+        totalVerts += tile->header->vertCount;
+        memory += static_cast<size_t>(tile->dataSize);
+    }
+
+    LOG_INFO("NavMesh Analysis Complete: " + std::to_string(totalPolys) + " polygons across " + std::to_string(tileCount) + " tiles.");
 }
 
 } // namespace Navigation 

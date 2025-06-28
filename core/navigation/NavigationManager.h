@@ -52,6 +52,11 @@ public:
     bool LoadMapTile(int mapId, int tileX, int tileY);
     bool IsMapLoaded(uint32_t mapId) const;
     void UnloadMap(uint32_t mapId);
+    void UnloadAllMaps();
+
+    // Map name utilities
+    static std::string GetMapName(uint32_t mapId);
+    static std::vector<std::pair<uint32_t, std::string>> GetAllMapNames();
 
     // Pathfinding
     PathResult FindPath(const Vector3& start, const Vector3& end, 
@@ -139,6 +144,8 @@ private:
     void ApplyWallPadding(NavigationPath& path, float padding);
 
     // Internal implementation methods
+    dtQueryFilter* CreateCustomFilter(const PathfindingOptions& options);
+    void ApplyElevationSmoothing(NavigationPath& path, const PathfindingOptions& options);
 };
 
 // Convenience macros

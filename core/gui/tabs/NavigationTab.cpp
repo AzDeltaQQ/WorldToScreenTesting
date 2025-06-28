@@ -16,7 +16,7 @@ namespace GUI {
     NavigationTab::NavigationTab()
         : m_isVisible(true)
         , m_autoLoadCurrentMap(false)
-        , m_selectedMapId(-1)
+        , m_selectedMapIndex(-1)
         , m_searchRadius(50.0f)
         , m_statusMessage("Ready")
         , m_isPathfindingInProgress(false)
@@ -87,6 +87,31 @@ namespace GUI {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Minimum distance path should keep from walls/obstacles. Set to 0 to disable.");
         }
+        
+        ImGui::Separator();
+        ImGui::Text("Terrain Avoidance");
+        
+        ImGui::Checkbox("Avoid Steep Terrain", &m_pathfindingOptions.avoidSteepTerrain);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Strongly prefer flat terrain over hills and slopes to prevent falling off paths.");
+        }
+        
+        if (m_pathfindingOptions.avoidSteepTerrain) {
+            ImGui::SliderFloat("Steep Terrain Cost", &m_pathfindingOptions.steepTerrainCost, 10.0f, 500.0f, "%.1f");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Higher values make pathfinding avoid steep terrain more aggressively. Default: 100.0. Use 200+ for very hilly areas.");
+            }
+            
+            ImGui::SliderFloat("Max Elevation Change (yd)", &m_pathfindingOptions.maxElevationChange, 5.0f, 30.0f, "%.1f");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Maximum elevation change allowed between waypoints. Larger changes will be smoothed with intermediate waypoints.");
+            }
+            
+            ImGui::Checkbox("Prefer Lower Elevation", &m_pathfindingOptions.preferLowerElevation);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("When multiple paths are available, prefer routes that stay at lower elevations.");
+            }
+        }
 
         ImGui::Separator();
         RenderVMapFeatures();
@@ -109,15 +134,22 @@ namespace GUI {
         } else {
             // Determine the display name for the currently selected map
             const char* current_map_name = "Select a map";
-            if (m_selectedMapId != -1 && m_selectedMapId < m_availableMaps.size()) {
-                current_map_name = m_availableMaps[m_selectedMapId].c_str();
+            if (m_selectedMapIndex != -1 && m_selectedMapIndex < m_availableMaps.size()) {
+                // Format: "000 - Eastern Kingdom"
+                static std::string displayName;
+                const auto& mapPair = m_availableMaps[m_selectedMapIndex];
+                displayName = std::to_string(mapPair.first) + " - " + mapPair.second;
+                current_map_name = displayName.c_str();
             }
 
             if (ImGui::BeginCombo("Map", current_map_name)) {
                 for (int i = 0; i < m_availableMaps.size(); ++i) {
-                    const bool is_selected = (m_selectedMapId == i);
-                    if (ImGui::Selectable(m_availableMaps[i].c_str(), is_selected)) {
-                        m_selectedMapId = i;
+                    const bool is_selected = (m_selectedMapIndex == i);
+                    const auto& mapPair = m_availableMaps[i];
+                    std::string displayText = std::to_string(mapPair.first) + " - " + mapPair.second;
+                    
+                    if (ImGui::Selectable(displayText.c_str(), is_selected)) {
+                        m_selectedMapIndex = i;
                     }
                     if (is_selected) {
                         ImGui::SetItemDefaultFocus();
@@ -133,6 +165,12 @@ namespace GUI {
         ImGui::SameLine();
         if (ImGui::Button("Unload Map")) {
             UnloadSelectedMap();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Unload All")) {
+            Navigation::NavigationManager::Instance().UnloadAllMaps();
+            SetStatusMessage("All maps unloaded", false);
+            m_navMeshStats = {}; // Reset stats
         }
         ImGui::SameLine();
         if (ImGui::Button("Refresh List")) {
@@ -320,8 +358,8 @@ namespace GUI {
         ImGui::Spacing();
         
         ImGui::Text("Available Maps: %zu", m_availableMaps.size());
-        for (const auto& mapName : m_availableMaps) {
-            ImGui::Text("- Map %s", mapName.c_str());
+        for (const auto& mapPair : m_availableMaps) {
+            ImGui::Text("- Map %u: %s", mapPair.first, mapPair.second.c_str());
         }
         
         ImGui::Spacing();
@@ -333,18 +371,17 @@ namespace GUI {
     }
 
     void NavigationTab::LoadSelectedMap() {
-        if (m_selectedMapId != -1) {
-            try {
-                int mapId = std::stoi(m_availableMaps[m_selectedMapId].substr(0, 3));
-                LOG_INFO("[NavigationTab] Loading map " + std::to_string(mapId) + "...");
-                if (Navigation::NavigationManager::Instance().LoadMapNavMesh(mapId)) {
-                    SetStatusMessage("Map " + std::to_string(mapId) + " loaded successfully", false);
-                    m_navMeshStats = Navigation::NavigationManager::Instance().GetNavMeshStats(static_cast<uint32_t>(mapId));
-                } else {
-                    SetStatusMessage("Failed to load map " + std::to_string(mapId), true);
-                }
-            } catch (const std::invalid_argument& e) {
-                SetStatusMessage("Invalid map file selected.", true);
+        if (m_selectedMapIndex != -1 && m_selectedMapIndex < m_availableMaps.size()) {
+            const auto& mapPair = m_availableMaps[m_selectedMapIndex];
+            uint32_t mapId = mapPair.first;
+            const std::string& mapName = mapPair.second;
+            
+            LOG_INFO("[NavigationTab] Loading map " + std::to_string(mapId) + " (" + mapName + ")...");
+            if (Navigation::NavigationManager::Instance().LoadMapNavMesh(static_cast<int>(mapId))) {
+                SetStatusMessage("Map " + std::to_string(mapId) + " (" + mapName + ") loaded successfully", false);
+                m_navMeshStats = Navigation::NavigationManager::Instance().GetNavMeshStats(mapId);
+            } else {
+                SetStatusMessage("Failed to load map " + std::to_string(mapId) + " (" + mapName + ")", true);
             }
         } else {
             SetStatusMessage("Please select a map to load", true);
@@ -352,15 +389,16 @@ namespace GUI {
     }
 
     void NavigationTab::UnloadSelectedMap() {
-        if (m_selectedMapId != -1) {
-            try {
-                int mapId = std::stoi(m_availableMaps[m_selectedMapId].substr(0, 3));
-                Navigation::NavigationManager::Instance().UnloadMap(mapId);
-                SetStatusMessage("Map " + std::to_string(mapId) + " unloaded.", false);
-                m_navMeshStats = {}; // Reset stats
-            } catch (const std::invalid_argument& e) {
-                 SetStatusMessage("Invalid map file selected for unload.", true);
-            }
+        if (m_selectedMapIndex != -1 && m_selectedMapIndex < m_availableMaps.size()) {
+            const auto& mapPair = m_availableMaps[m_selectedMapIndex];
+            uint32_t mapId = mapPair.first;
+            const std::string& mapName = mapPair.second;
+            
+            Navigation::NavigationManager::Instance().UnloadMap(mapId);
+            SetStatusMessage("Map " + std::to_string(mapId) + " (" + mapName + ") unloaded.", false);
+            m_navMeshStats = {}; // Reset stats
+        } else {
+            SetStatusMessage("Please select a map to unload", true);
         }
     }
 
@@ -376,21 +414,8 @@ namespace GUI {
     }
 
     void NavigationTab::ScanAvailableMaps() {
-        m_availableMaps.clear();
-        std::string mapsDir = Navigation::NavigationManager::Instance().GetMapsDirectory();
-        if (mapsDir.empty()) {
-            return;
-        }
-        try {
-            for (const auto& entry : std::filesystem::directory_iterator(mapsDir)) {
-                if (entry.is_regular_file() && entry.path().extension() == ".mmap") {
-                    m_availableMaps.push_back(entry.path().filename().string());
-                }
-            }
-            std::sort(m_availableMaps.begin(), m_availableMaps.end());
-        } catch (const std::filesystem::filesystem_error& e) {
-            LOG_ERROR("[NavigationTab] Filesystem error: " + std::string(e.what()));
-        }
+        m_availableMaps = Navigation::NavigationManager::GetAllMapNames();
+        LOG_INFO("[NavigationTab] Found " + std::to_string(m_availableMaps.size()) + " available maps");
     }
 
     bool NavigationTab::ParseVector3FromInput(const char* input, Vector3& result) {

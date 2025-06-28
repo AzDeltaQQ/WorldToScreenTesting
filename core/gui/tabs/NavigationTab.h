@@ -47,8 +47,8 @@ namespace GUI {
         bool m_isStatusError;
         std::string m_pathfindingStatus;
 
-        std::vector<std::string> m_availableMaps;
-        int m_selectedMapId;
+        std::vector<std::pair<uint32_t, std::string>> m_availableMaps; // mapId, mapName
+        int m_selectedMapIndex; // Index into m_availableMaps vector
 
         Navigation::VisualizationSettings m_visSettings;
         Navigation::PathfindingOptions m_pathfindingOptions;

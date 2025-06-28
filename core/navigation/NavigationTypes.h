@@ -83,10 +83,18 @@ namespace Navigation {
 
         // Minimum distance to keep from walls/obstacles when adjusting waypoints (0 = disabled)
         float wallPadding;
+        
+        // Terrain preference options
+        bool avoidSteepTerrain;   // Strongly prefer flat terrain over hills/slopes
+        float steepTerrainCost;   // Cost multiplier for steep terrain (higher = more avoidance)
+        float maxElevationChange; // Maximum elevation change to allow between waypoints (yards)
+        bool preferLowerElevation; // When multiple paths available, prefer lower elevation routes
 
         PathfindingOptions() : mapId(0), movementType(MovementType::WALK), stepSize(0.5f), 
                               maxSearchDistance(50.0f), allowPartialPath(true), smoothPath(true),
-                              cornerCutting(0.0f), avoidEdges(true), preferCenterPath(true), wallPadding(8.0f) {}
+                              cornerCutting(0.0f), avoidEdges(true), preferCenterPath(true), wallPadding(8.0f),
+                              avoidSteepTerrain(true), steepTerrainCost(100.0f), maxElevationChange(15.0f), 
+                              preferLowerElevation(true) {}
     };
 
     // MMap file header structure (based on reference implementation)
