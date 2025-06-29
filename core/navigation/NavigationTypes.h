@@ -93,7 +93,7 @@ namespace Navigation {
         PathfindingOptions() : mapId(0), movementType(MovementType::WALK), stepSize(0.5f), 
                               maxSearchDistance(50.0f), allowPartialPath(true), smoothPath(true),
                               cornerCutting(0.0f), avoidEdges(true), preferCenterPath(true), wallPadding(2.5f),
-                              avoidSteepTerrain(true), steepTerrainCost(250.0f), maxElevationChange(2.5f), 
+                              avoidSteepTerrain(true), steepTerrainCost(10.0f), maxElevationChange(2.5f), 
                               preferLowerElevation(true) {}
     };
 

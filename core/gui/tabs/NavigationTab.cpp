@@ -21,7 +21,6 @@ namespace GUI {
         , m_statusMessage("Ready")
         , m_isPathfindingInProgress(false)
         , m_isStatusError(false)
-        , m_wallPadding(8.0f)
     {
         // Initialize input buffers
         memset(m_startPosBuf, 0, sizeof(m_startPosBuf));
@@ -81,14 +80,6 @@ namespace GUI {
         }
 
         ImGui::Separator();
-        ImGui::Text("Path Refinement");
-        
-        ImGui::SliderFloat("Wall Padding (yd)", &m_wallPadding, 0.0f, 15.0f, "%.2f");
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Minimum distance path should keep from walls/obstacles. Set to 0 to disable.");
-        }
-        
-        ImGui::Separator();
         ImGui::Text("Terrain Avoidance");
         
         ImGui::Checkbox("Avoid Steep Terrain", &m_pathfindingOptions.avoidSteepTerrain);
@@ -113,8 +104,6 @@ namespace GUI {
             }
         }
 
-        ImGui::Separator();
-        RenderVMapFeatures();
         ImGui::Separator();
     }
 
@@ -481,7 +470,7 @@ namespace GUI {
 
         // Configure pathfinding options with humanization settings
         m_pathfindingOptions.cornerCutting = 0.0f; // Disable shaping
-        m_pathfindingOptions.wallPadding = m_wallPadding;
+        m_pathfindingOptions.wallPadding = 0.0f;
 
         LOG_INFO("[NavigationTab] Finding path from (" +
                  std::to_string(startPos.x) + ", " + std::to_string(startPos.y) + ", " + std::to_string(startPos.z) +
@@ -537,98 +526,5 @@ namespace GUI {
             m_hasValidPath = false;
             SetStatusMessage("Pathfinding failed: " + navManager.GetLastError(), true);
         }
-    }
-
-    void NavigationTab::RenderVMapFeatures() {
-        ImGui::Text("VMap Collision Detection");
-        
-        auto& navManager = Navigation::NavigationManager::Instance();
-        if (!navManager.IsInitialized()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "NavigationManager not initialized");
-            return;
-        }
-
-        // Line of Sight Testing
-        ImGui::Text("Line of Sight Test");
-        ImGui::InputText("LOS Start", m_losStartBuf, sizeof(m_losStartBuf));
-        ImGui::SameLine();
-        if (ImGui::Button("Current##LOS1")) {
-            Vector3 currentPos;
-            if (MovementController::GetInstance().GetPlayerPosition(currentPos)) {
-                snprintf(m_losStartBuf, sizeof(m_losStartBuf), "%.3f, %.3f, %.3f", currentPos.x, currentPos.y, currentPos.z);
-            }
-        }
-
-        ImGui::InputText("LOS End", m_losEndBuf, sizeof(m_losEndBuf));
-        ImGui::SameLine();
-        if (ImGui::Button("Current##LOS2")) {
-            Vector3 currentPos;
-            if (MovementController::GetInstance().GetPlayerPosition(currentPos)) {
-                snprintf(m_losEndBuf, sizeof(m_losEndBuf), "%.3f, %.3f, %.3f", currentPos.x, currentPos.y, currentPos.z);
-            }
-        }
-
-        if (ImGui::Button("Test Line of Sight")) {
-            Vector3 startPos, endPos;
-            if (ParseVector3FromInput(m_losStartBuf, startPos) && ParseVector3FromInput(m_losEndBuf, endPos)) {
-                bool hasLOS = navManager.IsInLineOfSight(startPos, endPos);
-                SetStatusMessage("Line of Sight: " + std::string(hasLOS ? "CLEAR" : "BLOCKED"), !hasLOS);
-            } else {
-                SetStatusMessage("Invalid position format. Use: x, y, z", true);
-            }
-        }
-
-        ImGui::Spacing();
-
-        // Wall Distance Testing
-        ImGui::Text("Wall Distance Test");
-        ImGui::InputText("Position", m_wallTestPosBuf, sizeof(m_wallTestPosBuf));
-        ImGui::SameLine();
-        if (ImGui::Button("Current##Wall")) {
-            Vector3 currentPos;
-            if (MovementController::GetInstance().GetPlayerPosition(currentPos)) {
-                snprintf(m_wallTestPosBuf, sizeof(m_wallTestPosBuf), "%.3f, %.3f, %.3f", currentPos.x, currentPos.y, currentPos.z);
-            }
-        }
-
-        ImGui::InputText("Direction", m_wallTestDirBuf, sizeof(m_wallTestDirBuf));
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Direction vector (e.g., 1, 0, 0 for forward)");
-        }
-
-        ImGui::SliderFloat("Max Distance", &m_wallTestMaxDist, 1.0f, 50.0f, "%.1f yards");
-
-        if (ImGui::Button("Test Wall Distance")) {
-            Vector3 position, direction;
-            if (ParseVector3FromInput(m_wallTestPosBuf, position) && ParseVector3FromInput(m_wallTestDirBuf, direction)) {
-                float distance = navManager.GetDistanceToWall(position, direction, m_wallTestMaxDist);
-                SetStatusMessage("Distance to wall: " + std::to_string(distance) + " yards", false);
-            } else {
-                SetStatusMessage("Invalid position/direction format. Use: x, y, z", true);
-            }
-        }
-
-        ImGui::Spacing();
-
-        // Nearby Walls Test
-        if (ImGui::Button("Find Nearby Walls")) {
-            Vector3 currentPos;
-            if (MovementController::GetInstance().GetPlayerPosition(currentPos)) {
-                auto walls = navManager.GetNearbyWalls(currentPos, 15.0f);
-                SetStatusMessage("Found " + std::to_string(walls.size()) + " nearby walls", false);
-                
-                // Log wall details
-                for (size_t i = 0; i < walls.size(); ++i) {
-                    const auto& wall = walls[i];
-                    LOG_INFO("Wall " + std::to_string(i+1) + ": Distance " + std::to_string(wall.distance) + 
-                            " yards at (" + std::to_string(wall.hitPoint.x) + ", " + 
-                            std::to_string(wall.hitPoint.y) + ", " + std::to_string(wall.hitPoint.z) + ")");
-                }
-            } else {
-                SetStatusMessage("Could not get player position", true);
-            }
-        }
-
-        ImGui::Spacing();
     }
 } 

@@ -78,15 +78,6 @@ struct MmapTileHeader
         : mmapMagic(MMAP_MAGIC), dtVersion(DT_NAVMESH_VERSION), mmapVersion(MMAP_VERSION), size(0), usesLiquids(0), padding{0,0,0} {}
 };
 
-// Calculates the data size of a tile from its header.
-/* int calculateTileDataSize(const dtMeshHeader* header) {
-    const int headerSize = dtAlign4(sizeof(dtMeshHeader));
-// ... existing code ...
-    return headerSize + vertsSize + polysSize + linksSize +
-        detailMeshesSize + detailVertsSize + detailTrisSize +
-        bvtreeSize + offMeshLinksSize;
-} */
-
 // Helper function to find maps directory
 std::string FindMapsDirectory(HMODULE hModule) {
     // Get the current module directory
@@ -237,22 +228,23 @@ bool NavigationManager::Initialize() {
         return false;
     }
 
-    // ---------------------------------------------------------------------
-    // AUTOMATIC TERRAIN-AWARE FILTER CONFIGURATION
-    // Let Detour handle obstacle avoidance automatically through proper area costs
-    // Include all walkable areas but heavily penalize problematic terrain
-    unsigned short includeFlags = NAV_GROUND | NAV_GROUND_STEEP; // Allow both ground types
-    unsigned short excludeFlags = NAV_WATER | NAV_MAGMA_SLIME;   // Exclude liquids
+    // AUTOMATIC TERRAIN-AWARE FILTERING - no manual controls needed
+    unsigned short includeFlags = NAV_GROUND | NAV_GROUND_STEEP;
+    unsigned short excludeFlags = NAV_WATER | NAV_MAGMA_SLIME;
 
     m_filter->setIncludeFlags(includeFlags);
     m_filter->setExcludeFlags(excludeFlags);
 
-    // AUTOMATIC AREA COSTS - designed to avoid obstacles naturally
-    m_filter->setAreaCost(NAV_AREA_GROUND,        1.0f);    // Normal ground - preferred
-    m_filter->setAreaCost(NAV_AREA_GROUND_STEEP,  250.0f);  // Steep terrain - heavily penalized (automatic hill avoidance)
-    m_filter->setAreaCost(NAV_AREA_WATER,         5.0f);    // Water - slight penalty when allowed
-    m_filter->setAreaCost(NAV_AREA_MAGMA_SLIME,   100.0f);  // Lava/slime - heavy penalty when allowed
-    
+    // AUTOMATIC AREA COSTS based on terrain analysis
+    float steepCost = 250.0f; // Default heavy penalty for steep terrain
+    float waterCost = 5.0f;   // Light penalty for water when allowed
+    float magmaCost = 100.0f; // Heavy penalty for lava when allowed
+
+    m_filter->setAreaCost(NAV_AREA_GROUND,        1.0f);      // Normal ground - preferred
+    m_filter->setAreaCost(NAV_AREA_GROUND_STEEP,  steepCost); // Steep terrain - automatically avoid hills
+    m_filter->setAreaCost(NAV_AREA_WATER,         waterCost); // Water - slight penalty
+    m_filter->setAreaCost(NAV_AREA_MAGMA_SLIME,   magmaCost); // Lava - heavy penalty
+
     LOG_INFO("Automatic terrain-aware filter configured - Steep terrain cost: 250x, Water cost: 5x");
 
     // Initialize VMap collision detection for nav-mesh enhancement
@@ -568,39 +560,28 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
     Vector3 recastStart = WoWToRecast(start);
     Vector3 recastEnd = WoWToRecast(end);
 
-    LOG_INFO("  recastStart: (" + std::to_string(recastStart.x) + ", " + std::to_string(recastStart.y) + ", " + std::to_string(recastStart.z) + ")");
-    LOG_INFO("  recastEnd  : (" + std::to_string(recastEnd.x) + ", " + std::to_string(recastEnd.y) + ", " + std::to_string(recastEnd.z) + ")");
-
     // Find start and end polygons with automatic fallback
     float extents[3] = {4.0f, 8.0f, 4.0f}; // Standard search extents
     dtPolyRef startRef, endRef;
     float startNearest[3], endNearest[3];
 
     // Find start polygon
-    LOG_INFO("    Searching for start polygon at: (" + std::to_string(recastStart.x) + ", " + std::to_string(recastStart.y) + ", " + std::to_string(recastStart.z) + ")");
     dtStatus startStatus = m_navMeshQuery->findNearestPoly(&recastStart.x, extents, filter, &startRef, startNearest);
     if (dtStatusFailed(startStatus) || startRef == 0) {
-        LOG_ERROR("    Failed to find start polygon");
+        LOG_ERROR("Failed to find start polygon");
         delete filter;
         path.result = PathResult::FAILED_START_POLY;
         return PathResult::FAILED_START_POLY;
     }
-    
-    float startDist = dtVdist(&recastStart.x, startNearest);
-    LOG_INFO("    start nearestPoly found (normal search) distance=" + std::to_string(startDist));
 
     // Find end polygon
-    LOG_INFO("    Searching for end polygon at: (" + std::to_string(recastEnd.x) + ", " + std::to_string(recastEnd.y) + ", " + std::to_string(recastEnd.z) + ")");
     dtStatus endStatus = m_navMeshQuery->findNearestPoly(&recastEnd.x, extents, filter, &endRef, endNearest);
     if (dtStatusFailed(endStatus) || endRef == 0) {
-        LOG_ERROR("    Failed to find end polygon");
+        LOG_ERROR("Failed to find end polygon");
         delete filter;
         path.result = PathResult::FAILED_END_POLY;
         return PathResult::FAILED_END_POLY;
     }
-    
-    float endDist = dtVdist(&recastEnd.x, endNearest);
-    LOG_INFO("    end nearestPoly found (normal search) distance=" + std::to_string(endDist));
 
     // AUTOMATIC PATH GENERATION - let Detour handle all obstacle avoidance
     const int MAX_POLYS = 512;
@@ -609,47 +590,10 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
 
     dtStatus pathStatus = m_navMeshQuery->findPath(startRef, endRef, startNearest, endNearest, filter, polyPath.data(), &polyCount, MAX_POLYS);
     if (dtStatusFailed(pathStatus) || polyCount == 0) {
-        LOG_ERROR("  Failed to find polygon path");
+        LOG_ERROR("Failed to find polygon path");
         delete filter;
         path.result = PathResult::FAILED_PATHFIND;
         return PathResult::FAILED_PATHFIND;
-    }
-
-    LOG_INFO("  Polygon path found with " + std::to_string(polyCount) + " polygons");
-
-    // Log first few and last few polygons for debugging
-    for (int i = 0; i < std::min(5, polyCount); ++i) {
-        LOG_INFO("    Poly[" + std::to_string(i) + "]: " + std::to_string(polyPath[i]));
-    }
-    if (polyCount > 10) {
-        LOG_INFO("    ... (" + std::to_string(polyCount - 10) + " polygons skipped) ...");
-        for (int i = std::max(5, polyCount - 5); i < polyCount; ++i) {
-            LOG_INFO("    Poly[" + std::to_string(i) + "]: " + std::to_string(polyPath[i]));
-        }
-    }
-
-    // Analyze area types in the path for debugging
-    std::map<int, int> areaCounts;
-    for (int i = 0; i < polyCount; ++i) {
-        const dtMeshTile* tile = 0;
-        const dtPoly* poly = 0;
-        if (dtStatusSucceed(m_navMesh->getTileAndPolyByRef(polyPath[i], &tile, &poly))) {
-            areaCounts[poly->getArea()]++;
-        }
-    }
-    
-    LOG_INFO("  Area types in polygon path:");
-    for (const auto& pair : areaCounts) {
-        std::string areaName;
-        float cost = 0.0f;
-        switch (pair.first) {
-            case NAV_AREA_GROUND: areaName = "GROUND"; cost = filter->getAreaCost(NAV_AREA_GROUND); break;
-            case NAV_AREA_GROUND_STEEP: areaName = "GROUND_STEEP"; cost = filter->getAreaCost(NAV_AREA_GROUND_STEEP); break;
-            case NAV_AREA_WATER: areaName = "WATER"; cost = filter->getAreaCost(NAV_AREA_WATER); break;
-            case NAV_AREA_MAGMA_SLIME: areaName = "MAGMA_SLIME"; cost = filter->getAreaCost(NAV_AREA_MAGMA_SLIME); break;
-            default: areaName = "UNKNOWN(" + std::to_string(pair.first) + ")"; break;
-        }
-        LOG_INFO("    " + areaName + " (area " + std::to_string(pair.first) + "): " + std::to_string(pair.second) + " polygons, cost=" + std::to_string(cost));
     }
 
     // AUTOMATIC WAYPOINT GENERATION with optimal segment length
@@ -667,13 +611,11 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
     );
 
     if (dtStatusFailed(straightStatus) || straightCount == 0) {
-        LOG_ERROR("  Failed to generate straight path");
+        LOG_ERROR("Failed to generate straight path");
         delete filter;
         path.result = PathResult::FAILED_PATHFIND;
         return PathResult::FAILED_PATHFIND;
     }
-
-    LOG_INFO("  Straight path generated with " + std::to_string(straightCount) + " waypoints from " + std::to_string(polyCount) + " polygons");
 
     // AUTOMATIC SEGMENT LENGTH OPTIMIZATION with VMap collision detection
     std::vector<Waypoint> finalWaypoints;
@@ -683,248 +625,111 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
     bool hasExtension = false;
     std::vector<Vector3> storedExtensionWaypoints;
     
-    // ENHANCED PATHFINDING: Combine nav-mesh with VMap collision detection
-    // The nav-mesh handles major terrain/obstacles, VMap catches fine details like fences
-    
-    LOG_INFO("  VMap collision detection: " + std::string(m_vmapManager ? "enabled" : "disabled"));
-    
-    // Test VMap functionality with a simple collision check
-    if (m_vmapManager) {
-        try {
-            Vector3 testStart = start;  // Use original pathfinding coordinates
-            Vector3 testEnd = end;
-            LOG_INFO("  VMap test: Testing line-of-sight from (" + 
-                    std::to_string(testStart.x) + ", " + std::to_string(testStart.y) + ", " + std::to_string(testStart.z) + ") to (" +
-                    std::to_string(testEnd.x) + ", " + std::to_string(testEnd.y) + ", " + std::to_string(testEnd.z) + ")");
-            
-            // Load VMap tiles for both positions if needed
-            m_vmapManager->LoadTileIfNeeded(options.mapId, testStart);
-            m_vmapManager->LoadTileIfNeeded(options.mapId, testEnd);
-            
-            bool hasLoS = m_vmapManager->IsInLineOfSight(testStart, testEnd, options.mapId);
-            LOG_INFO("  VMap test: Line-of-sight from start to end = " + std::string(hasLoS ? "CLEAR" : "BLOCKED"));
-            
-            // Check if navmesh path is shorter than direct distance (indicates obstacle)
-            Vector3 navmeshEnd = RecastToWoW(Vector3(straightPath[(straightCount-1)*3], straightPath[(straightCount-1)*3+1], straightPath[(straightCount-1)*3+2]));
-            float directDistance = testStart.Distance(testEnd);
-            float navmeshDistance = testStart.Distance(navmeshEnd);
-            
-            LOG_INFO("  Path analysis: Direct distance = " + std::to_string(directDistance) + 
-                    ", NavMesh end distance = " + std::to_string(navmeshDistance));
-            
-            if (navmeshDistance < directDistance * 0.9f) {
-                LOG_INFO("  OBSTACLE DETECTED: NavMesh path is significantly shorter than direct path - obstacle blocking the way");
-                
-                // Try to find a detour around the obstacle
-                Vector3 obstacleBypassAttempt = AttemptObstacleBypass(testStart, navmeshEnd, testEnd, options.mapId);
-                // Check if a valid bypass was found (not the same as the blocked position)
-                if (obstacleBypassAttempt.Distance(navmeshEnd) > 1.0f) { // Bypass is at least 1 yard away from blocked position
-                    LOG_INFO("  Obstacle bypass found: (" + std::to_string(obstacleBypassAttempt.x) + ", " + 
-                            std::to_string(obstacleBypassAttempt.y) + ", " + std::to_string(obstacleBypassAttempt.z) + ")");
-                    
-                    // GENERATE NEW PATH THROUGH BYPASS: start -> bypass -> target
-                    // Clear the current waypoints and rebuild with bypass
-                    finalWaypoints.clear();
-                    
-                    // First add path from start to bypass
-                    NavigationPath bypassPath1;
-                    PathfindingOptions bypassOptions = options;
-                    bypassOptions.smoothPath = false; // Don't smooth intermediate paths
-                    
-                    if (FindPath(testStart, obstacleBypassAttempt, bypassPath1, bypassOptions) == PathResult::SUCCESS) {
-                        for (const auto& wp : bypassPath1.waypoints) {
-                            finalWaypoints.emplace_back(wp.position);
-                        }
-                        LOG_INFO("  Added " + std::to_string(bypassPath1.waypoints.size()) + " waypoints from start to bypass");
-                        
-                        // Then add path from bypass to target
-                        NavigationPath bypassPath2;
-                        if (FindPath(obstacleBypassAttempt, testEnd, bypassPath2, bypassOptions) == PathResult::SUCCESS) {
-                            // Skip first waypoint to avoid duplicate
-                            for (size_t i = 1; i < bypassPath2.waypoints.size(); ++i) {
-                                finalWaypoints.emplace_back(bypassPath2.waypoints[i].position);
-                            }
-                            LOG_INFO("  Added " + std::to_string(bypassPath2.waypoints.size() - 1) + " waypoints from bypass to target");
-                            LOG_INFO("  Successfully generated bypass path with " + std::to_string(finalWaypoints.size()) + " total waypoints");
-                            
-                            // Skip the normal waypoint processing since we have a complete bypass path
-                            delete filter;
-                            
-                            path.waypoints = std::move(finalWaypoints);
-                            path.result = PathResult::SUCCESS;
-                            path.isComplete = true;
-                            path.movementType = options.movementType;
-
-                            // Calculate total path length
-                            path.totalLength = 0.0f;
-                            for (size_t i = 1; i < path.waypoints.size(); ++i) {
-                                path.totalLength += path.waypoints[i-1].position.Distance(path.waypoints[i].position);
-                            }
-
-                            // Apply path enhancement
-                            if (options.smoothPath) {
-                                HumanizePath(path, options);
-                            }
-
-                            // Remove duplicate waypoints
-                            auto it = std::unique(path.waypoints.begin(), path.waypoints.end(), 
-                                [](const Waypoint& a, const Waypoint& b) {
-                                    return a.position.Distance(b.position) < 0.1f;
-                                });
-                            path.waypoints.erase(it, path.waypoints.end());
-
-                            LOG_INFO("Final bypass path (" + std::to_string(path.waypoints.size()) + " points):");
-                            for (size_t i = 0; i < path.waypoints.size(); ++i) {
-                                const Vector3& pos = path.waypoints[i].position;
-                                LOG_INFO("  WP" + std::to_string(i) + ": (" + std::to_string(pos.x) + ", " + std::to_string(pos.y) + ", " + std::to_string(pos.z) + ")");
-                            }
-
-                            LOG_INFO("Successfully found bypass path with " + std::to_string(path.waypoints.size()) + " waypoints. Total length: " + std::to_string(path.totalLength));
-                            return PathResult::SUCCESS;
-                        } else {
-                            LOG_INFO("  Failed to find path from bypass to target, falling back to normal path");
-                            finalWaypoints.clear(); // Clear and fall back to normal processing
-                        }
-                    } else {
-                        LOG_INFO("  Failed to find path from start to bypass, falling back to normal path");
-                    }
-                } else {
-                    LOG_INFO("  No valid obstacle bypass found, trying to extend path from blocked position");
-                    
-                    // Try to extend the path from the blocked position toward the target
-                    Vector3 blockedPos = navmeshEnd;
-                    float remainingDistance = blockedPos.Distance(testEnd);
-                    
-                    if (remainingDistance > 1.0f) { // Only if there's meaningful distance left
-                        LOG_INFO("  Attempting to extend path from blocked position to target (remaining distance: " + std::to_string(remainingDistance) + ")");
-                        
-                        NavigationPath extensionPath;
-                        PathfindingOptions extOptions = options;
-                        extOptions.smoothPath = false;
-                        
-                        if (FindPath(blockedPos, testEnd, extensionPath, extOptions) == PathResult::SUCCESS && extensionPath.waypoints.size() > 1) {
-                            LOG_INFO("  Successfully found extension path with " + std::to_string(extensionPath.waypoints.size()) + " waypoints");
-                            
-                            // Store the extension waypoints to add AFTER the normal path
-                            std::vector<Vector3> extensionWaypoints;
-                            for (size_t i = 1; i < extensionPath.waypoints.size(); ++i) {
-                                extensionWaypoints.push_back(extensionPath.waypoints[i].position);
-                            }
-                            
-                            // Set a flag to add extension waypoints later
-                            hasExtension = true;
-                            storedExtensionWaypoints = extensionWaypoints;
-                            
-                            LOG_INFO("  Found extension with " + std::to_string(extensionWaypoints.size()) + " additional waypoints, will add after normal path");
-                        } else {
-                            LOG_INFO("  Could not extend path to target, path ends at blocked position");
-                        }
-                    }
-                }
-            }
-        } catch (...) {
-            LOG_ERROR("  VMap test: Exception during line-of-sight check");
-        }
-    } else {
-        LOG_INFO("  VMap test: Skipped (VMap disabled)");
-    }
+    // Enhanced pathfinding: Combine nav-mesh with VMap collision detection
+    Vector3 lastPos = start;
     
     for (int i = 0; i < straightCount; ++i) {
         float* v = &straightPath[i * 3];
         Vector3 recastPos(v[0], v[1], v[2]);
         Vector3 wowPos = RecastToWoW(recastPos);
-        
-        LOG_INFO("  WP" + std::to_string(i + 1) + " recast: (" + std::to_string(recastPos.x) + ", " + std::to_string(recastPos.y) + ", " + std::to_string(recastPos.z) + ") -> wow: (" + std::to_string(wowPos.x) + ", " + std::to_string(wowPos.y) + ", " + std::to_string(wowPos.z) + ")");
 
-        // Add waypoint with VMap validation
+        // Add waypoint with automatic segment subdivision
         if (finalWaypoints.empty()) {
-            finalWaypoints.emplace_back(wowPos);
+            finalWaypoints.emplace_back(AdjustToSurface(wowPos));
         } else {
             Vector3 lastPos = finalWaypoints.back().position;
             float segmentLength = lastPos.Distance(wowPos);
             
-            // AUTOMATIC SEGMENT SUBDIVISION with VMap collision checking
+            // AUTOMATIC SEGMENT SUBDIVISION
             if (segmentLength > MAX_SEGMENT_LENGTH) {
                 int subdivisions = static_cast<int>(std::ceil(segmentLength / MAX_SEGMENT_LENGTH));
                 for (int j = 1; j < subdivisions; ++j) {
                     float t = static_cast<float>(j) / subdivisions;
                     Vector3 interpPos = lastPos + (wowPos - lastPos) * t;
-                    
-                    // VMap collision check for subdivided segments
-                    bool subdivisionHasLoS = true;
-                    if (m_vmapManager) {
-                        try {
-                            // Load VMap tiles for both positions if needed
-                            m_vmapManager->LoadTileIfNeeded(options.mapId, lastPos);
-                            m_vmapManager->LoadTileIfNeeded(options.mapId, interpPos);
-                            
-                            subdivisionHasLoS = m_vmapManager->IsInLineOfSight(lastPos, interpPos, options.mapId);
-                        } catch (...) {
-                            LOG_ERROR("    VMap subdivision check failed with exception");
-                            subdivisionHasLoS = true; // Assume clear if check fails
-                        }
-                    }
-                    
-                    if (subdivisionHasLoS) {
-                        finalWaypoints.emplace_back(interpPos);
-                    } else {
-                        // If VMap detects collision, try to find alternative route
-                        LOG_INFO("    VMap collision detected on subdivided segment from (" + 
-                                std::to_string(lastPos.x) + ", " + std::to_string(lastPos.y) + ", " + std::to_string(lastPos.z) + ") to (" +
-                                std::to_string(interpPos.x) + ", " + std::to_string(interpPos.y) + ", " + std::to_string(interpPos.z) + ")");
-                        Vector3 adjustedPos = FindSafePosition(lastPos, interpPos, options.mapId);
-                        LOG_INFO("    FindSafePosition returned: (" + 
-                                std::to_string(adjustedPos.x) + ", " + std::to_string(adjustedPos.y) + ", " + std::to_string(adjustedPos.z) + ")");
-                        finalWaypoints.emplace_back(adjustedPos);
-                        LOG_INFO("    VMap collision detected, adjusted waypoint");
-                    }
+                    finalWaypoints.emplace_back(AdjustToSurface(interpPos));
                 }
             }
             
-            // Final waypoint with VMap validation
-            bool vmapCollisionDetected = false;
-            if (m_vmapManager) {
-                try {
-                    // Load VMap tiles for both positions if needed
-                    m_vmapManager->LoadTileIfNeeded(options.mapId, lastPos);
-                    m_vmapManager->LoadTileIfNeeded(options.mapId, wowPos);
-                    
-                    vmapCollisionDetected = !m_vmapManager->IsInLineOfSight(lastPos, wowPos, options.mapId);
-                } catch (...) {
-                    LOG_ERROR("    VMap collision check failed with exception");
-                    vmapCollisionDetected = false; // Assume no collision if check fails
-                }
-            }
-            
-            if (vmapCollisionDetected) {
-                // VMap detected collision - try to find safe alternative
-                LOG_INFO("    VMap collision detected from (" + 
-                        std::to_string(lastPos.x) + ", " + std::to_string(lastPos.y) + ", " + std::to_string(lastPos.z) + ") to (" +
-                        std::to_string(wowPos.x) + ", " + std::to_string(wowPos.y) + ", " + std::to_string(wowPos.z) + ")");
-                Vector3 adjustedPos = FindSafePosition(lastPos, wowPos, options.mapId);
-                LOG_INFO("    FindSafePosition returned: (" + 
-                        std::to_string(adjustedPos.x) + ", " + std::to_string(adjustedPos.y) + ", " + std::to_string(adjustedPos.z) + ")");
-                finalWaypoints.emplace_back(adjustedPos);
-                LOG_INFO("    VMap collision detected at waypoint, adjusted position");
-            } else {
-                // Log when VMap check passes (no collision)
-                if (m_vmapManager) {
-                    LOG_INFO("    VMap check PASSED (no collision) from (" + 
-                            std::to_string(lastPos.x) + ", " + std::to_string(lastPos.y) + ", " + std::to_string(lastPos.z) + ") to (" +
-                            std::to_string(wowPos.x) + ", " + std::to_string(wowPos.y) + ", " + std::to_string(wowPos.z) + ")");
-                }
-                finalWaypoints.emplace_back(wowPos);
+            finalWaypoints.emplace_back(AdjustToSurface(wowPos));
+        }
+        
+        lastPos = wowPos;
+    }
+
+    // Check if we need path extension to reach the actual target
+    if (finalWaypoints.size() > 0) {
+        Vector3 pathEnd = finalWaypoints.back().position;
+        float distanceToTarget = pathEnd.Distance(end);
+        
+        if (distanceToTarget > 5.0f) {
+            bool canExtend = !m_vmapManager || m_vmapManager->IsInLineOfSight(pathEnd, end, options.mapId);
+            if (canExtend) {
+                finalWaypoints.emplace_back(AdjustToSurface(end));
+                hasExtension = true;
             }
         }
     }
 
-    // Add extension waypoints if found
-    if (hasExtension) {
-        LOG_INFO("Adding " + std::to_string(storedExtensionWaypoints.size()) + " extension waypoints to complete path to target");
-        for (const Vector3& extWp : storedExtensionWaypoints) {
-            finalWaypoints.emplace_back(extWp);
+    // ------------------------------------------------------------------
+    // SECOND-PASS SUBDIVISION – ensure no remaining segment is longer than the
+    // horizontal threshold (ignore Z so we don't split purely vertical drops).
+    // ------------------------------------------------------------------
+    const float MAX_HORIZ_SEG = 15.0f; // yards in X-Y plane
+
+    for (size_t i = 1; i < finalWaypoints.size(); ++i) {
+        const Vector3& a = finalWaypoints[i-1].position;
+        const Vector3& b = finalWaypoints[i].position;
+
+        float horiz = std::sqrt((a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y));
+        if (horiz <= MAX_HORIZ_SEG)
+            continue;
+
+        int cuts = static_cast<int>(std::ceil(horiz / MAX_HORIZ_SEG));
+        float step = 1.0f / cuts;
+
+        std::vector<Waypoint> inserts;
+        inserts.reserve(cuts-1);
+        for (int c = 1; c < cuts; ++c) {
+            float t = step * c;
+            Vector3 p = a + (b - a) * t;
+            inserts.emplace_back(AdjustToSurface(p));
         }
-        LOG_INFO("Total waypoints after extension: " + std::to_string(finalWaypoints.size()));
+
+        finalWaypoints.insert(finalWaypoints.begin() + i, inserts.begin(), inserts.end());
+        i += inserts.size();
+    }
+
+    // ------------------------------------------------------------------
+    // THIRD PASS – obstacle validation using navmesh ray-casts and VMap LoS.
+    // Insert detour points when a segment is blocked.
+    // ------------------------------------------------------------------
+    {
+        const int MAX_ITERS = 4;   // safety – full scan up to 4 times
+        int iter = 0;
+        while (iter++ < MAX_ITERS) {
+            bool anyBlocked = false;
+            for (size_t i = 1; i < finalWaypoints.size(); ++i) {
+                const Vector3& a = finalWaypoints[i-1].position;
+                const Vector3& b = finalWaypoints[i].position;
+
+                bool blocked = SegmentHitsObstacle(a,b,options.mapId);
+                if (!blocked && m_vmapManager) {
+                    blocked = !m_vmapManager->IsInLineOfSight(a,b,options.mapId);
+                }
+                if (!blocked)
+                    continue;
+
+                Vector3 safe = AdjustToSurface(FindSafePosition(a,b,options.mapId));
+                // avoid duplicates
+                if (safe.Distance(a) < 0.1f || safe.Distance(b) < 0.1f) {
+                    continue; // cannot find better, skip to next
+                }
+                finalWaypoints.insert(finalWaypoints.begin()+i, Waypoint(safe));
+                anyBlocked = true;
+                break; // restart scanning from beginning after insertion
+            }
+            if (!anyBlocked) break; // path clean
+        }
     }
 
     delete filter;
@@ -953,12 +758,6 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
         });
     path.waypoints.erase(it, path.waypoints.end());
 
-    LOG_INFO("Final waypoint list (" + std::to_string(path.waypoints.size()) + " points):");
-    for (size_t i = 0; i < path.waypoints.size(); ++i) {
-        const Vector3& pos = path.waypoints[i].position;
-        LOG_INFO("  WP" + std::to_string(i) + ": (" + std::to_string(pos.x) + ", " + std::to_string(pos.y) + ", " + std::to_string(pos.z) + ")");
-    }
-
     LOG_INFO("Successfully found path with " + std::to_string(path.waypoints.size()) + " waypoints. Total length: " + std::to_string(path.totalLength));
     return PathResult::SUCCESS;
 }
@@ -981,6 +780,29 @@ Vector3 NavigationManager::WoWToRecast(const Vector3& wowPos) {
 Vector3 NavigationManager::RecastToWoW(const Vector3& recastPos) {
     // Inverse mapping: Detour(y,z,x) -> WoW(x,y,z)
     return Vector3(recastPos.z, recastPos.x, recastPos.y);
+}
+
+Vector3 NavigationManager::AdjustToSurface(const Vector3& wowPos) const {
+    if (!m_navMeshQuery)
+        return wowPos;
+
+    // Project the given WoW position onto the nav-mesh and convert back to WoW space.
+    Vector3 rcPos = const_cast<NavigationManager*>(this)->WoWToRecast(wowPos);
+    float ext[3] = {4.0f, 8.0f, 4.0f};
+    dtPolyRef ref = 0;
+    float nearest[3];
+
+    if (dtStatusFailed(m_navMeshQuery->findNearestPoly(&rcPos.x, ext, m_filter, &ref, nearest)) || ref == 0)
+        return wowPos; // Could not project – return original.
+
+    Vector3 worldNearest = RecastToWoW(Vector3(nearest[0], nearest[1], nearest[2]));
+
+    // If the vertical difference is small keep original height, otherwise snap to surface.
+    const float HEIGHT_EPS = 0.5f; // yards
+    if (std::abs(worldNearest.z - wowPos.z) < HEIGHT_EPS)
+        return Vector3(worldNearest.x, worldNearest.y, wowPos.z);
+
+    return worldNearest;
 }
 
 NavMeshStats NavigationManager::GetNavMeshStats(uint32_t mapId) const {
@@ -1042,11 +864,8 @@ std::string NavigationManager::GetLastError() const {
 
 void NavigationManager::HumanizePath(NavigationPath& path, const PathfindingOptions& options) {
     if (path.waypoints.size() < 3) {
-        LOG_INFO("HumanizePath: Not enough waypoints to humanize (" + std::to_string(path.waypoints.size()) + ")");
         return; // Need at least 3 points to humanize
     }
-
-    LOG_INFO("HumanizePath: Processing " + std::to_string(path.waypoints.size()) + " waypoints");
     
     std::vector<Waypoint> humanizedWaypoints;
     humanizedWaypoints.reserve(path.waypoints.size() * 2); // May add extra points
@@ -1055,33 +874,33 @@ void NavigationManager::HumanizePath(NavigationPath& path, const PathfindingOpti
     humanizedWaypoints.push_back(path.waypoints[0]);
 
     for (size_t i = 1; i < path.waypoints.size() - 1; ++i) {
-        Vector3 prevPos = path.waypoints[i-1].position;
-        Vector3 currentPos = path.waypoints[i].position;
-        Vector3 nextPos = path.waypoints[i+1].position;
+        const Vector3& prev = path.waypoints[i-1].position;
+        const Vector3& current = path.waypoints[i].position;
+        const Vector3& next = path.waypoints[i+1].position;
 
-        LOG_INFO("HumanizePath: Processing waypoint " + std::to_string(i) + " at (" + 
-                 std::to_string(currentPos.x) + ", " + std::to_string(currentPos.y) + ", " + std::to_string(currentPos.z) + ")");
-
-        // Apply corner cutting/shaping
-        Vector3 adjustedPos = SmoothCorner(prevPos, currentPos, nextPos, options.cornerCutting);
-
-        // Check if position was actually changed
-        float distanceMoved = currentPos.Distance(adjustedPos);
-        if (distanceMoved > 0.01f) {
-            LOG_INFO("HumanizePath: Adjusted waypoint " + std::to_string(i) + " by " + std::to_string(distanceMoved) + " yards to (" +
-                     std::to_string(adjustedPos.x) + ", " + std::to_string(adjustedPos.y) + ", " + std::to_string(adjustedPos.z) + ")");
+        // Apply corner cutting if enabled
+        if (options.cornerCutting != 0.0f) {
+            Vector3 smoothed = SmoothCorner(prev, current, next, options.cornerCutting);
+            humanizedWaypoints.emplace_back(smoothed);
+        } else {
+            humanizedWaypoints.push_back(path.waypoints[i]);
         }
-
-        humanizedWaypoints.emplace_back(adjustedPos);
     }
 
     // Keep the end point
     humanizedWaypoints.push_back(path.waypoints.back());
 
-    // Replace the original waypoints
+    // Apply wall padding if specified
+    if (options.wallPadding > 0.1f) {
+        ApplyWallPadding(path, options.wallPadding);
+    }
+
+    // Apply elevation smoothing if enabled
+    if (options.maxElevationChange > 0.0f) {
+        ApplyElevationSmoothing(path, options);
+    }
+
     path.waypoints = std::move(humanizedWaypoints);
-    
-    LOG_INFO("HumanizePath: Completed, final waypoint count: " + std::to_string(path.waypoints.size()));
 }
 
 Vector3 NavigationManager::SmoothCorner(const Vector3& prev, const Vector3& current, const Vector3& next, float cornerFactor) {
@@ -1501,8 +1320,6 @@ void NavigationManager::ApplyElevationSmoothing(NavigationPath& path, const Path
         return; // Need at least 3 waypoints to smooth
     }
     
-    LOG_INFO("ApplyElevationSmoothing: Processing " + std::to_string(path.waypoints.size()) + " waypoints");
-    
     std::vector<Waypoint> smoothedWaypoints;
     smoothedWaypoints.reserve(path.waypoints.size() * 2); // May add intermediate points
     
@@ -1519,48 +1336,17 @@ void NavigationManager::ApplyElevationSmoothing(NavigationPath& path, const Path
             (currentPos.y - prevPos.y) * (currentPos.y - prevPos.y)
         );
         
-        // Calculate slope percentage
-        float slope = (horizontalDistance > 0.1f) ? (elevationChange / horizontalDistance) * 100.0f : 0.0f;
-        
-        LOG_INFO("ApplyElevationSmoothing: WP" + std::to_string(i) + " elevation change: " + 
-                 std::to_string(elevationChange) + "y, horizontal: " + std::to_string(horizontalDistance) + 
-                 "y, slope: " + std::to_string(slope) + "%");
-        
         // If elevation change is too steep, try to add intermediate waypoints
-        if (elevationChange > options.maxElevationChange && horizontalDistance > 2.0f) {
-            LOG_INFO("ApplyElevationSmoothing: Steep elevation change detected, adding intermediate waypoints");
-            
+        if (elevationChange > options.maxElevationChange && horizontalDistance > 1.0f) {
             // Calculate how many intermediate points we need
-            int numIntermediatePoints = static_cast<int>(std::ceil(elevationChange / options.maxElevationChange)) - 1;
-            numIntermediatePoints = std::min(numIntermediatePoints, 5); // Limit to max 5 intermediate points
+            int intermediatePoints = static_cast<int>(std::ceil(elevationChange / options.maxElevationChange)) - 1;
+            intermediatePoints = std::min(intermediatePoints, 5); // Limit to 5 intermediate points max
             
-            // Add intermediate waypoints with gradual elevation changes
-            for (int j = 1; j <= numIntermediatePoints; ++j) {
-                float t = static_cast<float>(j) / static_cast<float>(numIntermediatePoints + 1);
-                
-                Vector3 intermediatePos = {
-                    prevPos.x + t * (currentPos.x - prevPos.x),
-                    prevPos.y + t * (currentPos.y - prevPos.y),
-                    prevPos.z + t * (currentPos.z - prevPos.z)
-                };
-                
-                // Try to project this intermediate point onto the navmesh
-                Vector3 recastPos = WoWToRecast(intermediatePos);
-                dtPolyRef polyRef;
-                float closestPoint[3];
-                float extents[3] = {5.0f, 10.0f, 5.0f}; // Generous search area
-                
-                dtStatus status = m_navMeshQuery->findNearestPoly(&recastPos.x, extents, m_filter, &polyRef, closestPoint);
-                if (dtStatusSucceed(status) && polyRef != 0) {
-                    Vector3 projectedPos = RecastToWoW(Vector3(closestPoint[0], closestPoint[1], closestPoint[2]));
-                    smoothedWaypoints.emplace_back(projectedPos);
-                    
-                    LOG_INFO("ApplyElevationSmoothing: Added intermediate WP at (" + 
-                             std::to_string(projectedPos.x) + ", " + std::to_string(projectedPos.y) + 
-                             ", " + std::to_string(projectedPos.z) + ")");
-                } else {
-                    LOG_WARNING("ApplyElevationSmoothing: Failed to project intermediate point onto navmesh");
-                }
+            // Add intermediate waypoints
+            for (int j = 1; j <= intermediatePoints; ++j) {
+                float t = static_cast<float>(j) / (intermediatePoints + 1);
+                Vector3 interpPos = prevPos + (currentPos - prevPos) * t;
+                smoothedWaypoints.emplace_back(AdjustToSurface(interpPos));
             }
         }
         
@@ -1568,10 +1354,7 @@ void NavigationManager::ApplyElevationSmoothing(NavigationPath& path, const Path
         smoothedWaypoints.push_back(path.waypoints[i]);
     }
     
-    // Replace the original waypoints
     path.waypoints = std::move(smoothedWaypoints);
-    
-    LOG_INFO("ApplyElevationSmoothing: Completed, final waypoint count: " + std::to_string(path.waypoints.size()));
 }
 
 static void MarkSteepPolys(dtNavMesh* navMesh, float heightThreshold) {
@@ -1701,13 +1484,9 @@ Vector3 NavigationManager::FindSafePosition(const Vector3& from, const Vector3& 
     const float MIN_FRACTION = 0.2f;   // start testing 20 % towards the goal
     const float MAX_FRACTION = 0.8f;   // stop at 80 %
 
-    LOG_INFO("    FindSafePosition: from (" + std::to_string(from.x) + ", " + std::to_string(from.y) + ", " + std::to_string(from.z) + 
-             ") to (" + std::to_string(to.x) + ", " + std::to_string(to.y) + ", " + std::to_string(to.z) + ")");
-
     Vector3 dir = to - from;
     float dist = dir.Length();
     if (dist < 0.1f) {
-        LOG_INFO("    FindSafePosition: distance too small, returning target");
         return to; // already there
     }
 
@@ -1731,59 +1510,39 @@ Vector3 NavigationManager::FindSafePosition(const Vector3& from, const Vector3& 
     };
 
     // Search candidates along the segment first (shrinking towards the start)
-    LOG_INFO("    FindSafePosition: trying segment positions from " + std::to_string(MAX_FRACTION) + " to " + std::to_string(MIN_FRACTION));
     for (float t = MAX_FRACTION; t >= MIN_FRACTION; t -= 0.1f) {
         Vector3 mid = from + dir * (dist * t);
-        LOG_INFO("    FindSafePosition: testing segment at t=" + std::to_string(t) + " pos=(" + 
-                std::to_string(mid.x) + ", " + std::to_string(mid.y) + ", " + std::to_string(mid.z) + ")");
         
         bool hasLoS = !m_vmapManager || m_vmapManager->IsInLineOfSight(from, mid, mapId);
-        LOG_INFO("    FindSafePosition: LoS result = " + std::string(hasLoS ? "true" : "false"));
         
         if (hasLoS) {
             if (auto projected = projectToNavMesh(mid)) {
-                LOG_INFO("    FindSafePosition: found valid segment position, projected to (" + 
-                        std::to_string(projected->x) + ", " + std::to_string(projected->y) + ", " + std::to_string(projected->z) + ")");
                 return *projected;
-            } else {
-                LOG_INFO("    FindSafePosition: segment position failed navmesh projection");
             }
         }
     }
 
     // Lateral detour: offset left/right up to 5 yards
-    LOG_INFO("    FindSafePosition: trying lateral detours up to 5 yards");
     for (float offset = 1.0f; offset <= 5.0f; offset += 1.0f) {
         for (int side = -1; side <= 1; side += 2) {
             Vector3 cand = to + perp * (offset * side);
-            LOG_INFO("    FindSafePosition: testing lateral offset=" + std::to_string(offset) + " side=" + std::to_string(side) + 
-                    " pos=(" + std::to_string(cand.x) + ", " + std::to_string(cand.y) + ", " + std::to_string(cand.z) + ")");
             
             bool hasLoS = !m_vmapManager || m_vmapManager->IsInLineOfSight(from, cand, mapId);
-            LOG_INFO("    FindSafePosition: lateral LoS result = " + std::string(hasLoS ? "true" : "false"));
             
             if (hasLoS) {
                 if (auto projected = projectToNavMesh(cand)) {
-                    LOG_INFO("    FindSafePosition: found valid lateral position, projected to (" + 
-                            std::to_string(projected->x) + ", " + std::to_string(projected->y) + ", " + std::to_string(projected->z) + ")");
                     return *projected;
-                } else {
-                    LOG_INFO("    FindSafePosition: lateral position failed navmesh projection");
                 }
             }
         }
     }
 
     // Fallback – step back a little so caller can retry later.
-    LOG_INFO("    FindSafePosition: using fallback position");
     Vector3 fallback = from + dir * (dist * 0.5f);
     if (auto projected = projectToNavMesh(fallback)) {
-        LOG_INFO("    FindSafePosition: fallback projected to (" + 
-                std::to_string(projected->x) + ", " + std::to_string(projected->y) + ", " + std::to_string(projected->z) + ")");
         return *projected;
     }
 
-    LOG_INFO("    FindSafePosition: all methods failed, returning from position");
     return from; // give up – should never happen
 }
 
@@ -1803,41 +1562,23 @@ std::pair<int, int> NavigationManager::GetTileFromPosition(const Vector3& positi
 }
 
 Vector3 NavigationManager::AttemptObstacleBypass(const Vector3& start, const Vector3& blockedEnd, const Vector3& targetEnd, uint32_t mapId) {
-    LOG_INFO("    AttemptObstacleBypass: Trying to find path around obstacle");
-    LOG_INFO("      Start: (" + std::to_string(start.x) + ", " + std::to_string(start.y) + ", " + std::to_string(start.z) + ")");
-    LOG_INFO("      Blocked at: (" + std::to_string(blockedEnd.x) + ", " + std::to_string(blockedEnd.y) + ", " + std::to_string(blockedEnd.z) + ")");
-    LOG_INFO("      Target: (" + std::to_string(targetEnd.x) + ", " + std::to_string(targetEnd.y) + ", " + std::to_string(targetEnd.z) + ")");
-    
     if (!m_navMeshQuery || m_loadedMaps.empty()) {
-        LOG_INFO("    AttemptObstacleBypass: No navmesh available, returning blocked position");
         return blockedEnd;
     }
 
-    // Strategy: Try to find walkable positions in a wider arc around the obstacle
+    // Simple bypass strategy: try a few perpendicular offsets
     Vector3 toTarget = (targetEnd - start).Normalized();
-    Vector3 toBlocked = (blockedEnd - start).Normalized();
-    
-    // Create perpendicular vectors for left/right movement (horizontal plane only)
-    Vector3 perpendicular(-toBlocked.y, toBlocked.x, 0.0f);
+    Vector3 perpendicular(-toTarget.y, toTarget.x, 0.0f);
     perpendicular = perpendicular.Normalized();
-    
-    // Try increasingly wide detours around the obstacle
-    const float maxDetourDistance = 150.0f; // Maximum 150 yards detour (much larger for big obstacles like fences)
-    const int numAttempts = 16; // Try 16 different distances
     
     float extents[3] = {4.0f, 8.0f, 4.0f};
     
-    for (int attempt = 1; attempt <= numAttempts; ++attempt) {
-        float detourDistance = (maxDetourDistance * attempt) / numAttempts;
-        
-        // Try both left and right sides
+    // Try 3 distances on each side
+    float distances[] = {10.0f, 25.0f, 50.0f};
+    
+    for (float distance : distances) {
         for (int side = -1; side <= 1; side += 2) {
-            // Calculate bypass position
-            Vector3 bypassPos = blockedEnd + perpendicular * (detourDistance * side);
-            
-            LOG_INFO("    AttemptObstacleBypass: Trying bypass at distance " + std::to_string(detourDistance) + 
-                    " side " + std::to_string(side) + ": (" + std::to_string(bypassPos.x) + ", " + 
-                    std::to_string(bypassPos.y) + ", " + std::to_string(bypassPos.z) + ")");
+            Vector3 bypassPos = blockedEnd + perpendicular * (distance * side);
             
             // Check if this position is on the navmesh
             Vector3 recastBypass = WoWToRecast(bypassPos);
@@ -1845,122 +1586,22 @@ Vector3 NavigationManager::AttemptObstacleBypass(const Vector3& start, const Vec
             float nearestPoint[3];
             
             dtStatus status = m_navMeshQuery->findNearestPoly(&recastBypass.x, extents, m_filter, &bypassPoly, nearestPoint);
-            if (dtStatusFailed(status) || bypassPoly == 0) {
-                LOG_INFO("    AttemptObstacleBypass: Bypass position not on navmesh");
-                continue;
-            }
-            
-            Vector3 projectedBypass = RecastToWoW(Vector3(nearestPoint[0], nearestPoint[1], nearestPoint[2]));
-            
-            // Test if we can path from start to bypass position
-            dtPolyRef startPoly;
-            float startNearest[3];
-            Vector3 recastStart = WoWToRecast(start);
-            status = m_navMeshQuery->findNearestPoly(&recastStart.x, extents, m_filter, &startPoly, startNearest);
-            if (dtStatusFailed(status) || startPoly == 0) {
-                continue;
-            }
-            
-            // Quick raycast test from start to bypass
-            dtRaycastHit rayHit;
-            memset(&rayHit, 0, sizeof(rayHit));
-            rayHit.t = 1.0f;
-            
-            status = m_navMeshQuery->raycast(startPoly, startNearest, nearestPoint, m_filter, 0, &rayHit, 0);
-            if (dtStatusSucceed(status) && rayHit.t >= 1.0f) {
-                // We can reach the bypass position!
-                LOG_INFO("    AttemptObstacleBypass: Found valid bypass position: (" + 
-                        std::to_string(projectedBypass.x) + ", " + std::to_string(projectedBypass.y) + 
-                        ", " + std::to_string(projectedBypass.z) + ")");
+            if (dtStatusSucceed(status) && bypassPoly != 0) {
+                Vector3 projectedBypass = RecastToWoW(Vector3(nearestPoint[0], nearestPoint[1], nearestPoint[2]));
                 
-                // Now test if we can path from bypass to target
-                Vector3 recastTarget = WoWToRecast(targetEnd);
-                dtPolyRef targetPoly;
-                float targetNearest[3];
-                
-                status = m_navMeshQuery->findNearestPoly(&recastTarget.x, extents, m_filter, &targetPoly, targetNearest);
-                if (dtStatusSucceed(status) && targetPoly != 0) {
-                    // Test raycast from bypass to target
-                    dtRaycastHit rayHit2;
-                    memset(&rayHit2, 0, sizeof(rayHit2));
-                    rayHit2.t = 1.0f;
+                // Quick raycast test from start to bypass
+                dtPolyRef startPoly;
+                float startNearest[3];
+                Vector3 recastStart = WoWToRecast(start);
+                status = m_navMeshQuery->findNearestPoly(&recastStart.x, extents, m_filter, &startPoly, startNearest);
+                if (dtStatusSucceed(status) && startPoly != 0) {
+                    dtRaycastHit rayHit;
+                    memset(&rayHit, 0, sizeof(rayHit));
+                    rayHit.t = 1.0f;
                     
-                    status = m_navMeshQuery->raycast(bypassPoly, nearestPoint, targetNearest, m_filter, 0, &rayHit2, 0);
-                    if (dtStatusSucceed(status) && rayHit2.t >= 1.0f) {
-                        LOG_INFO("    AttemptObstacleBypass: Bypass allows clear path to target!");
-                        return projectedBypass;
-                    } else {
-                        LOG_INFO("    AttemptObstacleBypass: Bypass position can't reach target (raycast hit at t=" + std::to_string(rayHit2.t) + ")");
-                    }
-                } else {
-                    LOG_INFO("    AttemptObstacleBypass: Target position not accessible from bypass");
-                }
-            } else {
-                LOG_INFO("    AttemptObstacleBypass: Cannot reach bypass position (raycast hit at t=" + std::to_string(rayHit.t) + ")");
-            }
-        }
-    }
-    
-    // If perpendicular bypass failed, try a radial search approach
-    LOG_INFO("    AttemptObstacleBypass: Perpendicular bypass failed, trying radial search...");
-    
-    // Try positions in a circle around the blocked point
-    for (float radius = 25.0f; radius <= 200.0f; radius += 25.0f) {
-        for (int angle = 0; angle < 360; angle += 30) {
-            float radians = angle * 3.14159f / 180.0f;
-            Vector3 offset(cos(radians) * radius, sin(radians) * radius, 0.0f);
-            Vector3 bypassPos = blockedEnd + offset;
-            
-            LOG_INFO("    AttemptObstacleBypass: Trying radial bypass at radius " + std::to_string(radius) + 
-                    " angle " + std::to_string(angle) + ": (" + std::to_string(bypassPos.x) + ", " + 
-                    std::to_string(bypassPos.y) + ", " + std::to_string(bypassPos.z) + ")");
-            
-            // Check if this position is on the navmesh
-            Vector3 recastBypass = WoWToRecast(bypassPos);
-            dtPolyRef bypassPoly;
-            float nearestPoint[3];
-            
-            dtStatus status = m_navMeshQuery->findNearestPoly(&recastBypass.x, extents, m_filter, &bypassPoly, nearestPoint);
-            if (dtStatusFailed(status) || bypassPoly == 0) {
-                continue; // Skip logging for radial search to reduce spam
-            }
-            
-            Vector3 projectedBypass = RecastToWoW(Vector3(nearestPoint[0], nearestPoint[1], nearestPoint[2]));
-            
-            // Test if we can path from start to bypass position
-            dtPolyRef startPoly;
-            float startNearest[3];
-            Vector3 recastStart = WoWToRecast(start);
-            status = m_navMeshQuery->findNearestPoly(&recastStart.x, extents, m_filter, &startPoly, startNearest);
-            if (dtStatusFailed(status) || startPoly == 0) {
-                continue;
-            }
-            
-            // Quick raycast test from start to bypass
-            dtRaycastHit rayHit;
-            memset(&rayHit, 0, sizeof(rayHit));
-            rayHit.t = 1.0f;
-            
-            status = m_navMeshQuery->raycast(startPoly, startNearest, nearestPoint, m_filter, 0, &rayHit, 0);
-            if (dtStatusSucceed(status) && rayHit.t >= 1.0f) {
-                // We can reach the bypass position!
-                // Now test if we can path from bypass to target
-                Vector3 recastTarget = WoWToRecast(targetEnd);
-                dtPolyRef targetPoly;
-                float targetNearest[3];
-                
-                status = m_navMeshQuery->findNearestPoly(&recastTarget.x, extents, m_filter, &targetPoly, targetNearest);
-                if (dtStatusSucceed(status) && targetPoly != 0) {
-                    // Test raycast from bypass to target
-                    dtRaycastHit rayHit2;
-                    memset(&rayHit2, 0, sizeof(rayHit2));
-                    rayHit2.t = 1.0f;
-                    
-                    status = m_navMeshQuery->raycast(bypassPoly, nearestPoint, targetNearest, m_filter, 0, &rayHit2, 0);
-                    if (dtStatusSucceed(status) && rayHit2.t >= 1.0f) {
-                        LOG_INFO("    AttemptObstacleBypass: Found valid radial bypass position: (" + 
-                                std::to_string(projectedBypass.x) + ", " + std::to_string(projectedBypass.y) + 
-                                ", " + std::to_string(projectedBypass.z) + ")");
+                    status = m_navMeshQuery->raycast(startPoly, startNearest, nearestPoint, m_filter, 0, &rayHit, 0);
+                    if (dtStatusSucceed(status) && rayHit.t >= 1.0f) {
+                        // We can reach the bypass position, return it
                         return projectedBypass;
                     }
                 }
@@ -1968,8 +1609,7 @@ Vector3 NavigationManager::AttemptObstacleBypass(const Vector3& start, const Vec
         }
     }
     
-    LOG_INFO("    AttemptObstacleBypass: No valid bypass found after extensive search, returning blocked position");
-    return blockedEnd;
+    return blockedEnd; // No bypass found
 }
 
 } // namespace Navigation 

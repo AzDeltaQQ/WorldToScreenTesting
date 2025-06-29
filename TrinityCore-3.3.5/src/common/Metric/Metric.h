@@ -22,7 +22,7 @@
 #include "Duration.h"
 #include "MPSCQueue.h"
 #include "Optional.h"
-#include <boost/container/small_vector.hpp>
+#include <vector>
 #include <functional>
 #include <iosfwd>
 #include <memory>
@@ -46,7 +46,7 @@ enum MetricDataType
 };
 
 using MetricTag = std::pair<std::string, std::string>;
-using MetricTagsVector = boost::container::small_vector<MetricTag, 2>;
+using MetricTagsVector = std::vector<MetricTag>;
 
 struct MetricData
 {

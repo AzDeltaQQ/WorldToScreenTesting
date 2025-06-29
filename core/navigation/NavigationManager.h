@@ -114,6 +114,9 @@ public:
     dtQueryFilter* CreateCustomFilter(const PathfindingOptions& options);
     void ApplyElevationSmoothing(NavigationPath& path, const PathfindingOptions& options);
 
+    // Clamp a world-space position to the nav-mesh surface (keeps points from ending up far below terrain)
+    Vector3 AdjustToSurface(const Vector3& wowPos) const;
+
 private:
     NavigationManager();
     ~NavigationManager();

@@ -20,7 +20,6 @@ namespace GUI {
         void RenderVisualization();
         void RenderStatistics();
         void RenderDebugInfo();
-        void RenderVMapFeatures();
 
         // Actions
         void LoadSelectedMap();
@@ -61,16 +60,6 @@ namespace GUI {
         // Store last computed path for Walk Path action
         Navigation::NavigationPath m_lastPath;
         bool m_hasValidPath = false;
-        
-        // Wall padding setting (yards)
-        float m_wallPadding = 8.0f;
-        
-        // VMap collision testing
-        char m_losStartBuf[128] = "";
-        char m_losEndBuf[128] = "";
-        char m_wallTestPosBuf[128] = "";
-        char m_wallTestDirBuf[128] = "";
-        float m_wallTestMaxDist = 10.0f;
     };
 
 } // namespace GUI 
