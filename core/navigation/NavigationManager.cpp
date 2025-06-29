@@ -258,6 +258,30 @@ bool NavigationManager::Initialize() {
         LOG_INFO("VMap collision detection initialized successfully");
     }
 
+    // Initialize MapHeightManager for terrain height queries
+    // Derive terrain height-map directory from the known mmaps folder.
+    std::filesystem::path mmapsPath(m_mapsDirectory);
+    std::filesystem::path mapsDirPath = mmapsPath.parent_path() / "maps"; // e.g. core/maps/maps
+
+    // Fallbacks if the expected folder is missing
+    if (!std::filesystem::exists(mapsDirPath)) {
+        // Maybe the path itself already points to "maps" (no "mmaps" sub dir)
+        if (mmapsPath.filename() == "maps") {
+            mapsDirPath = mmapsPath;
+        } else {
+            // As a last resort use parent folder (core/maps)
+            mapsDirPath = mmapsPath.parent_path();
+        }
+    }
+
+    m_mapHeightManager = std::make_unique<MapHeightManager>();
+    if (!m_mapHeightManager->Initialize(mapsDirPath.string())) {
+        LOG_WARNING("MapHeightManager initialization failed - terrain height queries disabled");
+        m_mapHeightManager.reset();
+    } else {
+        LOG_INFO("MapHeightManager initialized successfully with terrain maps from " + mapsDirPath.string());
+    }
+
     m_initialized = true;
     LOG_INFO("NavigationManager initialized successfully with automatic obstacle avoidance");
     return true;
@@ -297,6 +321,12 @@ void NavigationManager::Shutdown() {
 
     // Prevent dangling pointer to freed navmesh
     m_navMesh = nullptr;
+
+    // Clean up MapHeightManager
+    if (m_mapHeightManager) {
+        m_mapHeightManager->Shutdown();
+        m_mapHeightManager.reset();
+    }
 }
 
 bool NavigationManager::IsMapLoaded(uint32_t mapId) const {
@@ -915,23 +945,34 @@ Vector3 NavigationManager::AdjustToSurface(const Vector3& wowPos, uint32_t mapId
 
     Vector3 worldNearest = RecastToWow(Vector3(nearest[0], nearest[1], nearest[2]));
     
-    // Now, use VMap to get the final ground height to avoid going under terrain
+    // ---------------------------------------------------------------------
+    // Clamp the waypoint to the highest valid ground among:
+    //   • terrain height-map (.map files) – ordinary landscape
+    //   • VMAP collision (WMO floors, bridges)
+    // We ONLY raise the point (never lower) and only when the difference is
+    // within a sane threshold, so we don't teleport the character meters
+    // above the surface due to bad data.
+    // ---------------------------------------------------------------------
+
+    float bestGround = -FLT_MAX;
+
+    if (m_mapHeightManager) {
+        float mapZ = m_mapHeightManager->GetHeight(effectiveMapId, worldNearest);
+        if (mapZ > -FLT_MAX)
+            bestGround = mapZ;
+    }
+
     if (m_vmapManager) {
-        float groundZ = m_vmapManager->GetGroundHeight(worldNearest, effectiveMapId);
-        LOG_DEBUG("VMap ground height check:");
-        LOG_DEBUG("  Input WoW pos: (" + std::to_string(worldNearest.x) + ", " + std::to_string(worldNearest.y) + ", " + std::to_string(worldNearest.z) + ")");
-        LOG_DEBUG("  VMap ground Z: " + std::to_string(groundZ));
-        
-        if (groundZ > -FLT_MAX) { // Valid ground height found
-            // Use VMap ground height if it's reasonable (within 10 units of nav mesh height)
-            if (std::abs(groundZ - worldNearest.z) < 10.0f) {
-                worldNearest.z = groundZ + 0.5f;
-                LOG_DEBUG("  Using VMap ground height: " + std::to_string(worldNearest.z));
-            } else {
-                LOG_DEBUG("  VMap height too different from nav mesh, using nav mesh height");
-            }
-        } else {
-            LOG_DEBUG("  VMap returned invalid height, using nav mesh height");
+        float vmapZ = m_vmapManager->GetGroundHeight(worldNearest, effectiveMapId);
+        if (vmapZ > -FLT_MAX && vmapZ > bestGround)
+            bestGround = vmapZ;
+    }
+
+    // Raise the waypoint when it is significantly below the best ground.
+    if (bestGround > -FLT_MAX) {
+        float diff = bestGround - worldNearest.z;
+        if (diff > 0.3f && diff < 6.0f) {
+            worldNearest.z = bestGround + 0.05f; // tiny offset above ground
         }
     }
 
@@ -947,26 +988,23 @@ Vector3 NavigationManager::EnsureAboveGround(const Vector3& pos, uint32_t mapId)
         return pos;
     }
 
-    float groundZ = m_vmapManager->GetGroundHeight(pos, effectiveMapId);
-    
-    if (groundZ > -FLT_MAX) {
-        if (pos.z < groundZ + 0.25f) { // If point is below or very close to ground
-            Vector3 newPos = pos;
-            newPos.z = groundZ + 0.5f; // Place it slightly above ground
-            std::stringstream ss;
-            ss << "EnsureAboveGround: Original: (" << std::fixed << std::setprecision(2) << pos.x << ", " << pos.y << ", " << pos.z 
-               << "), Ground: " << groundZ << ", New: (" << newPos.x << ", " << newPos.y << ", " << newPos.z << ")";
-            LOG_DEBUG(ss.str());
-            return newPos;
-        }
+    float vmapZ = m_vmapManager->GetGroundHeight(pos, effectiveMapId);
+
+    float terrainZ = -FLT_MAX;
+    if (m_mapHeightManager) {
+        terrainZ = m_mapHeightManager->GetHeight(effectiveMapId, pos);
     }
-    else {
-        std::stringstream ss;
-        ss << "EnsureAboveGround: Could not find ground for (" << std::fixed << std::setprecision(2) << pos.x << ", " << pos.y << ", " << pos.z << ")";
-        LOG_WARNING(ss.str());
+
+    float finalGroundZ = std::max(terrainZ, vmapZ);
+
+    if (finalGroundZ > -FLT_MAX && pos.z < finalGroundZ - 0.2f) {
+        Vector3 newPos = pos;
+        newPos.z = finalGroundZ + 0.05f;
+        LOG_DEBUG("EnsureAboveGround: Adjusted Z from " + std::to_string(pos.z) + " to " + std::to_string(newPos.z));
+        return newPos;
     }
-    
-    // If ground not found or point is already well above ground, return original position
+
+    // No adjustment needed or no ground found
     return pos;
 }
 
