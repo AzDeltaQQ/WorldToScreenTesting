@@ -12,6 +12,20 @@
 using namespace VMAP; // TrinityCore collision namespace
 using namespace Navigation;
 
+namespace {
+    // Convert WoW coordinates to VMap internal representation (same as TrinityCore's convertPositionToInternalRep)
+    Vector3 WowToVMap(const Vector3& wowPos) {
+        const float mid = 0.5f * 64.0f * 533.33333333f; // 17066.666...
+        return Vector3(mid - wowPos.x, mid - wowPos.y, wowPos.z);
+    }
+    
+    // Convert VMap coordinates back to WoW coordinates  
+    Vector3 VMapToWow(const Vector3& vmapPos) {
+        const float mid = 0.5f * 64.0f * 533.33333333f; // 17066.666...
+        return Vector3(mid - vmapPos.x, mid - vmapPos.y, vmapPos.z);
+    }
+}
+
 VMapManager::VMapManager() = default;
 
 VMapManager::~VMapManager() { Shutdown(); }
@@ -38,6 +52,19 @@ bool VMapManager::Initialize(const std::string& mmapsDirectory)
 
     m_tcVMapMgr = std::make_unique<VMapManager2>();
 
+    // Try to load the main map tree for Kalimdor (map 1) to test VMap functionality
+    LOG_DEBUG("Testing VMap loading for map 1 (Kalimdor)...");
+    int loadResult = m_tcVMapMgr->loadMap(m_vmapsDirectory.c_str(), 1, 32, 32);
+    if (loadResult == VMAP::VMAP_LOAD_RESULT_OK) {
+        LOG_INFO("VMap test load successful for map 1 tile (32,32)");
+        // Keep it loaded for testing
+        uint64_t tileKey = GetTileKey(32, 32);
+        m_loadedTiles[1].insert(tileKey);
+        m_loadedTileCount++;
+    } else {
+        LOG_WARNING("VMap test load failed for map 1 tile (32,32), result code: " + std::to_string(loadResult));
+    }
+
     m_isInitialized = true;
 
     LOG_INFO("VMapManager initialized. vmaps path: " + m_vmapsDirectory);
@@ -62,10 +89,13 @@ bool VMapManager::IsInLineOfSight(const Vector3& start, const Vector3& end, uint
     if (!m_isInitialized || !m_tcVMapMgr)
         return true;
 
+    Vector3 vmapStart = WowToVMap(start);
+    Vector3 vmapEnd = WowToVMap(end);
+
     return m_tcVMapMgr->isInLineOfSight(
         mapId,
-        start.x, start.y, start.z,
-        end.x, end.y, end.z,
+        vmapStart.x, vmapStart.y, vmapStart.z,
+        vmapEnd.x,   vmapEnd.y,   vmapEnd.z,
         ModelIgnoreFlags::Nothing);
 }
 
@@ -73,7 +103,8 @@ bool VMapManager::IsPointWalkable(const Vector3& point, uint32_t mapId) const {
     if (!m_tcVMapMgr)
         return true;
 
-    float ground = m_tcVMapMgr->getHeight(mapId, point.x, point.y, point.z + 50.0f /*search up*/, 100.0f);
+    Vector3 vmapPoint = WowToVMap(point);
+    float ground = m_tcVMapMgr->getHeight(mapId, vmapPoint.x, vmapPoint.y, vmapPoint.z + 50.0f, 100.0f);
     return ground < VMAP_INVALID_HEIGHT; // if we got a height value, assume walkable.
 }
 
@@ -82,11 +113,32 @@ bool VMapManager::HasTerrainObstacle(const Vector3& point, uint32_t mapId) const
 float VMapManager::GetGroundHeight(const Vector3& point, uint32_t mapId) const
 {
     if (!m_tcVMapMgr)
-        return point.z;
+        return -FLT_MAX; // VMap system not available
 
-    float h = m_tcVMapMgr->getHeight(mapId, point.x, point.y, point.z + 50.0f, 100.0f);
-    if (h < VMAP_INVALID_HEIGHT) return point.z;
-    return h;
+    // Ensure the VMap tile covering this point is loaded
+    const_cast<VMapManager*>(this)->LoadTileIfNeeded(mapId, point);
+
+    // TrinityCore VMap API expects INTERNAL coordinates (mid - x, mid - y, z).
+    // Convert the input WoW world-space position to that space.
+    Vector3 vmapPoint = WowToVMap(point);
+
+    // Query slightly above the point so we can search downward.
+    constexpr float SEARCH_OFFSET   = 5.0f;   // yards
+    constexpr float MAX_SEARCH_DIST = 100.0f; // yards
+
+    float height = m_tcVMapMgr->getHeight(mapId,
+                                          vmapPoint.x,
+                                          vmapPoint.y,
+                                          vmapPoint.z + SEARCH_OFFSET,
+                                          MAX_SEARCH_DIST);
+
+    // `getHeight` returns either a valid Z value or the constant
+    // VMAP_INVALID_HEIGHT_VALUE (-200000.f).  Treat anything below
+    // VMAP_INVALID_HEIGHT as invalid.
+    if (height > VMAP_INVALID_HEIGHT)
+        return height;
+
+    return -FLT_MAX; // indicate failure
 }
 
 bool VMapManager::LoadMapTile(uint32_t mapId, uint32_t tileX, uint32_t tileY) {
@@ -95,16 +147,28 @@ bool VMapManager::LoadMapTile(uint32_t mapId, uint32_t tileX, uint32_t tileY) {
         return false;
     }
 
+    // TrinityCore uses a different coordinate system for VMap tiles
+    // The tile coordinates need to be converted from WoW world coordinates
+    LOG_DEBUG("Loading VMap tile for map " + std::to_string(mapId) + " tile (" + std::to_string(tileX) + ", " + std::to_string(tileY) + ")");
+
     int result = m_tcVMapMgr->loadMap(m_vmapsDirectory.c_str(), mapId, static_cast<int>(tileX), static_cast<int>(tileY));
-    if (result == VMAP::VMAP_LOAD_RESULT_OK || result == VMAP::VMAP_LOAD_RESULT_IGNORED)
+    if (result == VMAP::VMAP_LOAD_RESULT_OK)
     {
         uint64_t tileKey = GetTileKey(tileX, tileY);
         m_loadedTiles[mapId].insert(tileKey);
         m_loadedTileCount++;
+        LOG_DEBUG("Successfully loaded VMap tile (" + std::to_string(tileX) + ", " + std::to_string(tileY) + ") for map " + std::to_string(mapId));
         return true;
     }
 
-    LOG_WARNING("Failed to load VMap tile (code " + std::to_string(result) + ") map=" + std::to_string(mapId) + " x=" + std::to_string(tileX) + " y=" + std::to_string(tileY));
+    if (result == VMAP::VMAP_LOAD_RESULT_IGNORED)
+    {
+        LOG_DEBUG("No VMap tile present for map " + std::to_string(mapId) + " (" + std::to_string(tileX) + ", " + std::to_string(tileY) + ") – file missing, skipping.");
+    }
+    else
+    {
+        LOG_WARNING("Failed to load VMap tile (code " + std::to_string(result) + ") map=" + std::to_string(mapId) + " x=" + std::to_string(tileX) + " y=" + std::to_string(tileY));
+    }
     return false;
 }
 
@@ -148,15 +212,18 @@ float VMapManager::GetDistanceToWall(const Vector3& position, const Vector3& dir
         return maxDistance;
 
     Vector3 end = position + direction.Normalized() * maxDistance;
+    Vector3 vmapStart = WowToVMap(position);
+    Vector3 vmapEnd = WowToVMap(end);
 
-    float rx = end.x, ry = end.y, rz = end.z;
+    float rx, ry, rz; // result placeholders
     if (m_tcVMapMgr->getObjectHitPos(mapId,
-        position.x, position.y, position.z,
-        end.x, end.y, end.z,
+        vmapStart.x, vmapStart.y, vmapStart.z,
+        vmapEnd.x,   vmapEnd.y,   vmapEnd.z,
         rx, ry, rz, 0.0f))
     {
-        Vector3 hit(rx, ry, rz);
-        return position.Distance(hit);
+        Vector3 vmapHit(rx, ry, rz);
+        Vector3 wowHit = VMapToWow(vmapHit);
+        return position.Distance(wowHit);
     }
 
     return maxDistance;
@@ -168,15 +235,21 @@ std::vector<VMapCollisionResult> VMapManager::GetNearbyWalls(const Vector3& cent
 }
 
 // Private helper methods
-std::pair<uint32_t, uint32_t> VMapManager::GetTileCoordinates(const Vector3& position) {
-    // WoW uses 533.33333 yards per tile
+std::pair<uint32_t, uint32_t> VMapManager::GetTileCoordinates(const Vector3& position) const {
+    // According to WoW coordinate system:
+    //   World X axis -> South (+x decreases tileY)
+    //   World Y axis -> West  (+y increases tileX)
+    // VMap tile indexing:
+    //   tileX = floor( (ZEROPOINT - worldY) / TILE_SIZE )
+    //   tileY = floor( (ZEROPOINT - worldX) / TILE_SIZE )
     const float TILE_SIZE = 533.33333f;
-    const float MAP_SIZE = 64.0f * TILE_SIZE; // 64x64 tiles
-    const float MAP_HALF_SIZE = MAP_SIZE * 0.5f;
-    
-    // Convert world coordinates to tile coordinates
-    uint32_t tileX = static_cast<uint32_t>((MAP_HALF_SIZE - position.x) / TILE_SIZE);
-    uint32_t tileY = static_cast<uint32_t>((MAP_HALF_SIZE - position.y) / TILE_SIZE);
+    const float ZEROPOINT = 32.0f * TILE_SIZE;
+
+    float wowY = position.y; // Vector3.y holds WoW Y
+    float wowX = position.x; // Vector3.x holds WoW X
+
+    uint32_t tileX = static_cast<uint32_t>(floorf((ZEROPOINT - wowY) / TILE_SIZE));
+    uint32_t tileY = static_cast<uint32_t>(floorf((ZEROPOINT - wowX) / TILE_SIZE));
     
     // Clamp to valid tile range [0, 63]
     tileX = std::min(63u, std::max(0u, tileX));

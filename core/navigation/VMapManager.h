@@ -57,7 +57,7 @@ namespace Navigation {
         std::unordered_map<uint32_t, std::unordered_set<uint64_t>> m_loadedTiles;
 
         // Helper functions
-        std::pair<uint32_t, uint32_t> GetTileCoordinates(const Vector3& position);
+        std::pair<uint32_t, uint32_t> GetTileCoordinates(const Vector3& position) const;
         uint64_t GetTileKey(uint32_t tileX, uint32_t tileY);
 
         // Load and validate individual VMap files (helper)

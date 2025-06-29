@@ -1,37 +1,37 @@
 #pragma once
 
-#include "../types/types.h"
 #include <vector>
 #include <string>
-#include <memory>
-
-// Forward declarations - remove dtPolyRef forward declaration as it conflicts with Recast typedef
-class dtNavMesh;
-class dtNavMeshQuery;
-class dtQueryFilter;
+#include <cstdint>
+#include "types.h"
 
 namespace Navigation {
 
-    // Navigation result status
+    // Result of a pathfinding query
     enum class PathResult {
         SUCCESS,
+        FAILED_INVALID_START,
+        FAILED_INVALID_END,
+        FAILED_NO_PATH,
         FAILED_NO_NAVMESH,
+        FAILED_TIMEOUT,
+        FAILED_INTERNAL_ERROR,
+        PARTIAL_PATH,
+        FAILED_INVALID_INPUT,
         FAILED_START_POLY,
         FAILED_END_POLY,
-        FAILED_PATHFIND,
-        FAILED_INVALID_INPUT,
-        PARTIAL_PATH
+        FAILED_PATHFIND
     };
 
-    // Navigation movement types
+    // Type of movement for a path segment
     enum class MovementType {
         WALK,
-        FLY,
+        JUMP,
         SWIM,
-        AUTO_DETECT
+        FLY
     };
 
-    // Map tile information
+    // Represents a single tile in the navigation mesh grid
     struct MapTile {
         uint32_t mapId;
         uint32_t tileX;
@@ -40,7 +40,7 @@ namespace Navigation {
         std::string filePath;
     };
 
-    // Navigation path waypoint
+    // A single point in a navigation path
     struct Waypoint {
         Vector3 position;
         float radius;
@@ -65,9 +65,10 @@ namespace Navigation {
 
         bool IsValid() const { return result == PathResult::SUCCESS && !waypoints.empty(); }
         size_t GetWaypointCount() const { return waypoints.size(); }
+        void Clear() { waypoints.clear(); totalLength = 0.0f; isComplete = false; result = PathResult::FAILED_NO_NAVMESH; }
     };
 
-    // Navigation query parameters
+    // Options for pathfinding
     struct PathfindingOptions {
         uint32_t mapId;
         MovementType movementType;
@@ -76,36 +77,27 @@ namespace Navigation {
         bool allowPartialPath;
         bool smoothPath;
         
-        // Human-like pathfinding options
+        // Humanization parameters
         float cornerCutting;       // How much to cut corners -1.0 to 1.0 (negative = more angular, positive = smoother)
         bool avoidEdges;          // Try to stay away from cliff edges (default: true)
         bool preferCenterPath;    // Prefer walking in center of walkable areas (default: true)
-
-        // Minimum distance to keep from walls/obstacles when adjusting waypoints (0 = disabled)
-        float wallPadding;
         
-        // Terrain preference options
+        // Obstacle avoidance
+        float wallPadding;
+
+        // Terrain-aware pathfinding
         bool avoidSteepTerrain;   // Strongly prefer flat terrain over hills/slopes
         float steepTerrainCost;   // Cost multiplier for steep terrain (higher = more avoidance)
         float maxElevationChange; // Maximum elevation change to allow between waypoints (yards)
         bool preferLowerElevation; // When multiple paths available, prefer lower elevation routes
 
-        PathfindingOptions() : mapId(0), movementType(MovementType::WALK), stepSize(0.5f), 
-                              maxSearchDistance(50.0f), allowPartialPath(true), smoothPath(true),
-                              cornerCutting(0.0f), avoidEdges(true), preferCenterPath(true), wallPadding(2.5f),
-                              avoidSteepTerrain(true), steepTerrainCost(10.0f), maxElevationChange(2.5f), 
-                              preferLowerElevation(true) {}
+        PathfindingOptions() : mapId(0), movementType(MovementType::WALK), stepSize(8.0f), maxSearchDistance(200.0f),
+                               allowPartialPath(true), smoothPath(true), cornerCutting(0.2f), avoidEdges(true),
+                               preferCenterPath(true), wallPadding(0.5f), avoidSteepTerrain(true),
+                               steepTerrainCost(25.0f), maxElevationChange(5.0f), preferLowerElevation(false) {}
     };
 
-    // MMap file header structure (based on reference implementation)
-    struct MMapFileHeader {
-        char magic[8];          // "MMAP001"
-        uint32_t version;
-        uint32_t tileCount;
-        uint32_t reserved[4];
-    };
-
-    // Navigation mesh statistics
+    // Statistics for a loaded nav-mesh
     struct NavMeshStats {
         uint32_t totalTiles;
         uint32_t loadedTiles;
@@ -113,12 +105,10 @@ namespace Navigation {
         uint32_t totalVertices;
         size_t memoryUsage;
         uint32_t currentMapId;
-
-        NavMeshStats() : totalTiles(0), loadedTiles(0), totalPolygons(0), 
-                        totalVertices(0), memoryUsage(0), currentMapId(0) {}
     };
 
-    // Visualization settings
+
+    // Visualization settings for debugging
     struct VisualizationSettings {
         bool enabled;
         bool showNavMesh;

@@ -9,8 +9,8 @@
 #include "../types/types.h"
 #include "NavigationTypes.h"
 #include "VMapManager.h"
-#include "../../dependencies/recastnavigation/Detour/Include/DetourNavMesh.h"
-#include "../../dependencies/recastnavigation/Detour/Include/DetourNavMeshQuery.h"
+#include "../../TrinityCore-3.3.5/dep/recastnavigation/Detour/Include/DetourNavMesh.h"
+#include "../../TrinityCore-3.3.5/dep/recastnavigation/Detour/Include/DetourNavMeshQuery.h"
 
 // Forward declarations for Detour types (already provided by Detour headers)
 struct dtNavMesh;
@@ -71,12 +71,12 @@ public:
     std::vector<VMapCollisionResult> GetNearbyWalls(const Vector3& center, float radius = 10.0f, uint32_t mapId = 0);
 
     // Coordinate conversion utilities
-    // Mapping that matches our generated navmesh:
-    //   recastX =  WoW_Y
-    //   recastY =  WoW_Z
-    //   recastZ =  WoW_X
-    static Vector3 WoWToRecast(const Vector3& wowPos);
-    static Vector3 RecastToWoW(const Vector3& recastPos);
+    // Mapping that matches our generated navmesh (taking into account that WowUnit already swaps X/Y):
+    //   recastX = -WoW_Y  -> -internal.x
+    //   recastY =  WoW_Z  ->  internal.z
+    //   recastZ = -WoW_X  -> -internal.y
+    Vector3 WowToRecast(const Vector3& wowPos) const;
+    Vector3 RecastToWow(const Vector3& recastPos) const;
 
     // State queries
     bool IsInitialized() const { return m_initialized; }
@@ -115,7 +115,13 @@ public:
     void ApplyElevationSmoothing(NavigationPath& path, const PathfindingOptions& options);
 
     // Clamp a world-space position to the nav-mesh surface (keeps points from ending up far below terrain)
-    Vector3 AdjustToSurface(const Vector3& wowPos) const;
+    Vector3 AdjustToSurface(const Vector3& wowPos, uint32_t mapId) const;
+
+    // Ensure the point is above terrain surface (uses vmap ground height when available)
+    Vector3 EnsureAboveGround(const Vector3& pos, uint32_t mapId) const;
+
+    // NavMesh origin (set when map loaded)
+    Vector3 m_navOrigin{0,0,0};
 
 private:
     NavigationManager();
@@ -124,6 +130,9 @@ private:
 
     // Initialization helpers
     bool FindMapsDirectory();
+    
+    // VMap tile preloading for path validation
+    void PreloadVMapTilesForPath(const std::vector<Waypoint>& waypoints, uint32_t mapId);
     
     // File operations
     std::string GetMMapFilePath(uint32_t mapId) const;

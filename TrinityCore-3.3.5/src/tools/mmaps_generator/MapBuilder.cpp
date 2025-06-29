@@ -1101,24 +1101,19 @@ namespace MMAP
         // Finer voxel resolution *and* wider erosion so fences become un-walkable.
         // We use the exact values we passed to mmaps_generator when rebuilding.
 
-        config.cs = 0.30f;   // --cellSize=0.30  (world-units per voxel in XZ)
-        config.ch = 0.20f;   // --cellHeight=0.20 (voxel height)
+        config.cs = 0.25f;
+        config.ch = 0.25f;
 
-        // Agent parameters (expressed in voxels)
-        config.walkableHeight = static_cast<int>(std::ceil(1.9f / config.ch)); // ≈ 10 voxels (player height)
+        // Require at least 3 yd vertical clearance – this removes interior "caves" inside solid terrain and
+        // prevents nav-mesh from flowing underneath fences or rock overhangs.
+        config.walkableHeight = static_cast<int>(std::ceil(3.0f / config.ch));
+        config.walkableRadius = static_cast<int>(std::ceil(0.8f / config.cs));
+        config.walkableClimb = static_cast<int>(std::floor(0.8f / config.ch));
+        config.walkableSlopeAngle = 45.0f;
 
-        // Make the agent wider so erosion removes thin wall tops/gaps
-        // Increased from 4 to 6 voxels (~1.8 yd) to better erode fence gaps
-        config.walkableRadius = m_bigBaseUnit ? 3 : 6; // 6 voxels (~1.8 yd) for normal tiles
-
-        // Reduce climb so agents cannot step onto low wall caps
-        config.walkableClimb = m_bigBaseUnit ? 2 : 4;
-        
-        // This can be controlled by the --maxAngle argument, but we'll hard-code your desired 35 degrees.
-        config.walkableSlopeAngle = 35.0f;                  // Corresponds to your --walkableSlope=35
         // --- END OF UPDATED PARAMETERS ---
         
-        config.walkableSlopeAngleNotSteep = m_maxWalkableAngleNotSteep ? *m_maxWalkableAngleNotSteep : 35.0f;
+        config.walkableSlopeAngleNotSteep = m_maxWalkableAngleNotSteep ? *m_maxWalkableAngleNotSteep : 40.0f;
         config.tileSize = tileConfig.VERTEX_PER_TILE;
         config.borderSize = config.walkableRadius + 3;
         config.maxEdgeLen = tileConfig.VERTEX_PER_TILE + 1;
