@@ -49,12 +49,16 @@ if(NOT TARGET Boost::filesystem)
         list(APPEND CMAKE_PREFIX_PATH "${BOOST_ROOT}")
     endif()
 
-    set(Boost_USE_STATIC_LIBS OFF)
+    set(Boost_USE_STATIC_LIBS ON)
     set(Boost_USE_MULTITHREADED ON)
-    set(Boost_USE_STATIC_RUNTIME OFF)
+    set(Boost_USE_STATIC_RUNTIME ON)
 
     find_package(Boost 1.71 REQUIRED COMPONENTS filesystem system)
 endif()
+
+# Set CMAKE_MSVC_RUNTIME_LIBRARY
+include(Compiler/MSVC)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # ZLIB (needed by g3dlite)
 find_package(ZLIB REQUIRED)

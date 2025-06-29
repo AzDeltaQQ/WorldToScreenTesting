@@ -107,6 +107,7 @@ public:
     bool SegmentHitsObstacle(const Vector3& a, const Vector3& b, uint32_t mapId = 0);
     void ValidatePath(NavigationPath& path);
     Vector3 FindSafePosition(const Vector3& from, const Vector3& to, uint32_t mapId = 0);
+    Vector3 AttemptObstacleBypass(const Vector3& start, const Vector3& blockedEnd, const Vector3& targetEnd, uint32_t mapId = 0);
     std::pair<int, int> GetTileFromPosition(const Vector3& position);
 
     // Internal implementation methods

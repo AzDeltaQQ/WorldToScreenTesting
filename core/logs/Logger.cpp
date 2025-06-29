@@ -34,42 +34,27 @@ Logger* Logger::GetInstance() {
     return s_instance.get();
 }
 
-void Logger::Initialize(const std::string& logFilePath) {
+void Logger::Initialize(HMODULE hModule, const std::string& logFilePath) {
     try {
         auto instance = GetInstance();
         std::lock_guard<std::mutex> lock(instance->m_fileMutex);
         
         std::string finalPath = logFilePath;
         if (finalPath.empty()) {
-            try {
-                // Get the DLL's directory
-                char dllPath[MAX_PATH];
-                HMODULE hModule = GetModuleHandle(L"WorldToScreenTesting.dll");
-                if (hModule && GetModuleFileNameA(hModule, dllPath, MAX_PATH)) {
-                    std::filesystem::path dllDir = std::filesystem::path(dllPath).parent_path();
-                    finalPath = (dllDir / "WorldToScreenTesting.log").string();
+            char dllPath[MAX_PATH] = {0};
+            if (hModule && GetModuleFileNameA(hModule, dllPath, MAX_PATH) > 0) {
+                char* lastSlash = strrchr(dllPath, '\\');
+                if (lastSlash) {
+                    *lastSlash = '\0'; // Null-terminate the string at the slash to get the directory
+                    finalPath = std::string(dllPath) + "\\WorldToScreenTesting.log";
                 } else {
-                    // Fallback to temp directory
-                    char tempPath[MAX_PATH];
-                    if (GetTempPathA(MAX_PATH, tempPath)) {
-                        finalPath = std::string(tempPath) + "WorldToScreenTesting.log";
-                    } else {
-                        // Last resort - current directory
-                        finalPath = "WorldToScreenTesting.log";
-                    }
+                    // Fallback if path has no slashes for some reason
+                    finalPath = "WorldToScreenTesting.log";
                 }
-            } catch (...) {
-                // If path operations fail, use simple filename
+            } else {
+                // Final fallback if GetModuleFileNameA fails
                 finalPath = "WorldToScreenTesting.log";
             }
-        }
-        
-        // Try to ensure directory exists, but don't fail if it doesn't work
-        try {
-            std::filesystem::path logPath(finalPath);
-            std::filesystem::create_directories(logPath.parent_path());
-        } catch (...) {
-            // Ignore directory creation errors
         }
         
         instance->m_logFile.open(finalPath, std::ios::out | std::ios::trunc);
@@ -79,8 +64,7 @@ void Logger::Initialize(const std::string& logFilePath) {
             instance->Log(LogLevel::INFO, "Log file: " + finalPath);
         }
     } catch (...) {
-        // If all else fails, just use OutputDebugString
-        OutputDebugStringA("WorldToScreenTesting: Logger initialization failed, using debug output only");
+        OutputDebugStringA("WorldToScreenTesting: Catastrophic logger initialization failure.");
     }
 }
 

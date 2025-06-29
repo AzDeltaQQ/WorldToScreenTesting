@@ -9,6 +9,7 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#include <Windows.h>
 
 enum class LogLevel {
     DEBUG = 0,
@@ -34,7 +35,7 @@ public:
     ~Logger();
     
     static Logger* GetInstance();
-    static void Initialize(const std::string& logFilePath = "");
+    static void Initialize(HMODULE hModule, const std::string& logFilePath = "");
     static void Shutdown();
     
     void SetLogLevel(LogLevel level) { m_minLevel = level; }
