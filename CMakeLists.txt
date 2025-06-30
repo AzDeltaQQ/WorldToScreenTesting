@@ -216,6 +216,7 @@ set(SOURCES
     core/movement/MovementController.cpp
     core/navigation/NavigationManager.cpp
     core/navigation/VMapManager.cpp
+    core/navigation/MapHeightManager.cpp
     core/gui/tabs/NavigationTab.cpp
     core/logs/Logger.cpp
     core/TrinityStubs.cpp
@@ -257,6 +258,7 @@ set(HEADERS
     core/navigation/NavigationManager.h
     core/navigation/NavigationTypes.h
     core/navigation/VMapManager.h
+    core/navigation/MapHeightManager.h
     core/combat/CombatLogEntry.h
     core/combat/CombatLogManager.h
     core/combat/CombatLogAnalyzer.h

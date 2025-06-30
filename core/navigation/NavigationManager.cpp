@@ -733,7 +733,7 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
 
     // AUTOMATIC SEGMENT LENGTH OPTIMIZATION with VMap collision detection
     std::vector<Waypoint> finalWaypoints;
-    const float MAX_SEGMENT_LENGTH = 25.0f; // Increase to 25 yards to reduce subdivision
+    const float MAX_SEGMENT_LENGTH = 10.0f; // yards
     
     // Variables for path extension
     bool hasExtension = false;
@@ -748,15 +748,22 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
         Vector3 wowPos = RecastToWow(recastPos);
 
         // Debug the first few waypoints
-        if (i < 3) {
+        if (i < 100) {
             LOG_DEBUG("Waypoint " + std::to_string(i) + " conversion:");
             LOG_DEBUG("  Recast: (" + std::to_string(recastPos.x) + ", " + std::to_string(recastPos.y) + ", " + std::to_string(recastPos.z) + ")");
             LOG_DEBUG("  WoW: (" + std::to_string(wowPos.x) + ", " + std::to_string(wowPos.y) + ", " + std::to_string(wowPos.z) + ")");
         }
 
-        // Add waypoint with automatic segment subdivision
+        // Add waypoint with proper height adjustment and automatic segment subdivision
         if (finalWaypoints.empty()) {
-            finalWaypoints.emplace_back(AdjustToSurface(wowPos, options.mapId));
+            Vector3 adjustedPos = AdjustToSurface(wowPos, options.mapId);
+            finalWaypoints.emplace_back(adjustedPos);
+
+            // Real-time log for the very first waypoint
+            std::stringstream ssWp;
+            ssWp << "    WP 0 added: (" << std::fixed << std::setprecision(2)
+                 << adjustedPos.x << ", " << adjustedPos.y << ", " << adjustedPos.z << ")";
+            LOG_DEBUG(ssWp.str());
         } else {
             Vector3 lastPos = finalWaypoints.back().position;
             float segmentLength = lastPos.Distance(wowPos);
@@ -767,11 +774,88 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
                 for (int j = 1; j < subdivisions; ++j) {
                     float t = static_cast<float>(j) / subdivisions;
                     Vector3 interpPos = lastPos + (wowPos - lastPos) * t;
-                    finalWaypoints.emplace_back(AdjustToSurface(interpPos, options.mapId));
+                    // For interpolated points, use terrain height at the interpolated X,Y position
+                    Vector3 adjustedInterpPos = AdjustToSurface(interpPos, options.mapId);
+                    finalWaypoints.emplace_back(adjustedInterpPos);
+                    
+                    // Log the subdivided waypoint
+                    size_t subIdx = finalWaypoints.size() - 1;
+                    std::stringstream ssSubWp;
+                    ssSubWp << "    WP " << subIdx << " added: (" << std::fixed << std::setprecision(2)
+                           << adjustedInterpPos.x << ", " << adjustedInterpPos.y << ", " << adjustedInterpPos.z << ")";
+                    LOG_DEBUG(ssSubWp.str());
+                    
+                    // Log segment from previous to this subdivided waypoint
+                    if (subIdx > 0) {
+                        uint32_t diagMapId = options.mapId != 0 ? options.mapId : GetCurrentMapId();
+                        const Vector3& prev = finalWaypoints[subIdx - 1].position;
+                        
+                        std::stringstream ssSubSeg;
+                        ssSubSeg << "    WP " << (subIdx - 1) << " -> WP " << subIdx << " | diffStart=";
+
+                        if (m_mapHeightManager) {
+                            float groundPrev = m_mapHeightManager->GetHeight(diagMapId, prev);
+                            float groundCurr = m_mapHeightManager->GetHeight(diagMapId, adjustedInterpPos);
+
+                            if (groundPrev > -FLT_MAX)
+                                ssSubSeg << std::fixed << std::setprecision(2) << (prev.z - groundPrev);
+                            else
+                                ssSubSeg << "n/a";
+
+                            ssSubSeg << " diffEnd=";
+
+                            if (groundCurr > -FLT_MAX)
+                                ssSubSeg << std::fixed << std::setprecision(2) << (adjustedInterpPos.z - groundCurr);
+                            else
+                                ssSubSeg << "n/a";
+                        } else {
+                            ssSubSeg << "n/a diffEnd=n/a";
+                        }
+
+                        LOG_DEBUG(ssSubSeg.str());
+                    }
                 }
             }
             
-            finalWaypoints.emplace_back(AdjustToSurface(wowPos, options.mapId));
+            Vector3 adjustedPos = AdjustToSurface(wowPos, options.mapId);
+            finalWaypoints.emplace_back(adjustedPos);
+
+            // Real-time waypoint/segment diagnostics
+            size_t idx = finalWaypoints.size() - 1;
+            std::stringstream ssWp;
+            ssWp << "    WP " << idx << " added: (" << std::fixed << std::setprecision(2)
+                 << adjustedPos.x << ", " << adjustedPos.y << ", " << adjustedPos.z << ")";
+            LOG_DEBUG(ssWp.str());
+
+            // Always log segment information for waypoints after the first one
+            if (idx > 0) {
+                uint32_t diagMapId = options.mapId != 0 ? options.mapId : GetCurrentMapId();
+                const Vector3& prev = finalWaypoints[idx - 1].position;
+                
+                std::stringstream ssSeg;
+                ssSeg << "    WP " << (idx - 1) << " -> WP " << idx << " | diffStart=";
+
+                if (m_mapHeightManager) {
+                    float groundPrev = m_mapHeightManager->GetHeight(diagMapId, prev);
+                    float groundCurr = m_mapHeightManager->GetHeight(diagMapId, adjustedPos);
+
+                    if (groundPrev > -FLT_MAX)
+                        ssSeg << std::fixed << std::setprecision(2) << (prev.z - groundPrev);
+                    else
+                        ssSeg << "n/a";
+
+                    ssSeg << " diffEnd=";
+
+                    if (groundCurr > -FLT_MAX)
+                        ssSeg << std::fixed << std::setprecision(2) << (adjustedPos.z - groundCurr);
+                    else
+                        ssSeg << "n/a";
+                } else {
+                    ssSeg << "n/a diffEnd=n/a";
+                }
+
+                LOG_DEBUG(ssSeg.str());
+            }
         }
         
         lastPos = wowPos;
@@ -801,7 +885,7 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
     // SECOND-PASS SUBDIVISION – ensure no remaining segment is longer than the
     // horizontal threshold (ignore Z so we don't split purely vertical drops).
     // ------------------------------------------------------------------
-    const float MAX_HORIZ_SEG = 15.0f; // yards in X-Y plane
+    const float MAX_HORIZ_SEG = 8.0f; // yards in X-Y plane
 
     for (size_t i = 1; i < finalWaypoints.size(); ++i) {
         const Vector3& a = finalWaypoints[i-1].position;
@@ -819,7 +903,15 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
         for (int c = 1; c < cuts; ++c) {
             float t = step * c;
             Vector3 p = a + (b - a) * t;
-            inserts.emplace_back(AdjustToSurface(p, options.mapId));
+            Vector3 adjustedP = AdjustToSurface(p, options.mapId);
+            inserts.emplace_back(adjustedP);
+            
+            // Log the subdivided waypoint
+            size_t insertIdx = i + inserts.size() - 1; // Calculate what the index will be after insertion
+            std::stringstream ssSubWp;
+            ssSubWp << "    WP " << insertIdx << " added (subdivided): (" << std::fixed << std::setprecision(2)
+                   << adjustedP.x << ", " << adjustedP.y << ", " << adjustedP.z << ")";
+            LOG_DEBUG(ssSubWp.str());
         }
 
         finalWaypoints.insert(finalWaypoints.begin() + i, inserts.begin(), inserts.end());
@@ -840,9 +932,7 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
                 const Vector3& b = finalWaypoints[i].position;
 
                 bool blocked = SegmentHitsObstacle(a,b,options.mapId);
-                if (!blocked && m_vmapManager) {
-                    blocked = !m_vmapManager->IsInLineOfSight(a,b,options.mapId);
-                }
+                
                 if (!blocked)
                     continue;
 
@@ -852,6 +942,13 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
                     continue; // cannot find better, skip to next
                 }
                 finalWaypoints.insert(finalWaypoints.begin()+i, Waypoint(safe));
+                
+                // Log the obstacle avoidance waypoint
+                std::stringstream ssObstWp;
+                ssObstWp << "    WP " << i << " added (obstacle avoidance): (" << std::fixed << std::setprecision(2)
+                        << safe.x << ", " << safe.y << ", " << safe.z << ")";
+                LOG_DEBUG(ssObstWp.str());
+                
                 anyBlocked = true;
                 break; // restart scanning from beginning after insertion
             }
@@ -878,12 +975,15 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
         HumanizePath(path, options);
     }
 
-    // Remove duplicate waypoints automatically
+    // Remove duplicate waypoints and validate height transitions
     auto it = std::unique(path.waypoints.begin(), path.waypoints.end(), 
         [](const Waypoint& a, const Waypoint& b) {
             return a.position.Distance(b.position) < 0.1f; // Less than 0.1 yard difference
         });
     path.waypoints.erase(it, path.waypoints.end());
+
+    // Height smoothing removed - terrain heights from .map files are already accurate
+    // Trust the terrain data over artificial smoothing algorithms
 
     {
         std::stringstream ss;
@@ -897,7 +997,10 @@ PathResult NavigationManager::FindPath(const Vector3& start, const Vector3& end,
             sw << "  WP[" << i << "]: (" << std::fixed << std::setprecision(2) << wp.x << ", " << wp.y << ", " << wp.z << ")";
             LOG_DEBUG(sw.str());
         }
+
+        // (per-segment diagnostics now logged in real-time to avoid duplicates)
     }
+
     return PathResult::SUCCESS;
 }
 
@@ -934,46 +1037,83 @@ Vector3 NavigationManager::AdjustToSurface(const Vector3& wowPos, uint32_t mapId
     if (!m_navMeshQuery)
         return wowPos;
 
-    // Project the given WoW position onto the nav-mesh.
+    // Project the given WoW position onto the nav-mesh for horizontal positioning.
     Vector3 rcPos = WowToRecast(wowPos);
     float ext[3] = {4.0f, 8.0f, 4.0f};
     dtPolyRef ref = 0;
     float nearest[3];
 
-    if (dtStatusFailed(m_navMeshQuery->findNearestPoly(&rcPos.x, ext, m_filter, &ref, nearest)) || ref == 0)
-        return wowPos; // Could not project – return original.
-
-    Vector3 worldNearest = RecastToWow(Vector3(nearest[0], nearest[1], nearest[2]));
+    Vector3 worldNearest = wowPos; // Default to original position
+    
+    if (dtStatusSucceed(m_navMeshQuery->findNearestPoly(&rcPos.x, ext, m_filter, &ref, nearest)) && ref != 0) {
+        // Use navmesh for X,Y positioning.
+        Vector3 navPosWow = RecastToWow(Vector3(nearest[0], nearest[1], nearest[2]));
+        worldNearest.x = navPosWow.x;
+        worldNearest.y = navPosWow.y;
+        // Fetch precise height at that XY inside the poly
+        float closest[3];
+        if (dtStatusSucceed(m_navMeshQuery->closestPointOnPoly(ref, &rcPos.x, closest, nullptr))) {
+            Vector3 accurateWow = RecastToWow(Vector3(closest[0], closest[1], closest[2]));
+            worldNearest.z = accurateWow.z;
+        } else {
+            worldNearest.z = navPosWow.z; // fallback
+        }
+    }
     
     // ---------------------------------------------------------------------
-    // Clamp the waypoint to the highest valid ground among:
-    //   • terrain height-map (.map files) – ordinary landscape
-    //   • VMAP collision (WMO floors, bridges)
-    // We ONLY raise the point (never lower) and only when the difference is
-    // within a sane threshold, so we don't teleport the character meters
-    // above the surface due to bad data.
+    // Get the proper ground height using the correct priority:
+    //   1. Terrain height-map (.map files) – base landscape elevation
+    //   2. VMap collision (WMO floors, bridges) – only if higher than terrain
     // ---------------------------------------------------------------------
 
     float bestGround = -FLT_MAX;
+    float terrainZ = -FLT_MAX;
+    float vmapZ = -FLT_MAX;
 
+    // Always try to get terrain height first - this is the "true" ground
     if (m_mapHeightManager) {
-        float mapZ = m_mapHeightManager->GetHeight(effectiveMapId, worldNearest);
-        if (mapZ > -FLT_MAX)
-            bestGround = mapZ;
-    }
-
-    if (m_vmapManager) {
-        float vmapZ = m_vmapManager->GetGroundHeight(worldNearest, effectiveMapId);
-        if (vmapZ > -FLT_MAX && vmapZ > bestGround)
-            bestGround = vmapZ;
-    }
-
-    // Raise the waypoint when it is significantly below the best ground.
-    if (bestGround > -FLT_MAX) {
-        float diff = bestGround - worldNearest.z;
-        if (diff > 0.3f && diff < 6.0f) {
-            worldNearest.z = bestGround + 0.05f; // tiny offset above ground
+        terrainZ = m_mapHeightManager->GetHeight(effectiveMapId, worldNearest);
+        if (terrainZ > -FLT_MAX) {
+            bestGround = terrainZ;
         }
+    }
+
+    // VMap provides collision for buildings, bridges, etc. - use if higher than terrain
+    if (m_vmapManager) {
+        vmapZ = m_vmapManager->GetGroundHeight(worldNearest, effectiveMapId);
+        if (vmapZ > -FLT_MAX) {
+            // Only use VMap height if it's significantly higher than terrain (bridges, building floors)
+            if (bestGround < -FLT_MAX || vmapZ > bestGround + 0.1f) {
+                bestGround = vmapZ;
+            }
+        }
+    }
+
+    // Debug logging for height adjustment
+    LOG_DEBUG("AdjustToSurface at (" + std::to_string(worldNearest.x) + ", " + std::to_string(worldNearest.y) + ", " + std::to_string(worldNearest.z) + ")");
+    LOG_DEBUG("  Terrain height: " + (terrainZ > -FLT_MAX ? std::to_string(terrainZ) : "invalid"));
+    LOG_DEBUG("  VMap height: " + (vmapZ > -FLT_MAX ? std::to_string(vmapZ) : "invalid"));
+    LOG_DEBUG("  Best ground: " + (bestGround > -FLT_MAX ? std::to_string(bestGround) : "invalid"));
+    
+    if (bestGround > -FLT_MAX) {
+        float diff = worldNearest.z - bestGround; // NavmeshZ - GroundZ
+        LOG_DEBUG("  Height diff: " + std::to_string(diff) + " (NavmeshZ - GroundZ)");
+
+        // The previous logic here was too aggressive and would incorrectly "snap" waypoints up to the
+        // terrain height if the navmesh path was on a low-lying road or in a ravine. The navmesh Z
+        // coordinate is the authoritative source for walkable height, so we will now always trust it
+        // and have removed the code that would override it.
+        const float PULL_UP_THRESHOLD = 3.0f;
+        if (diff < -PULL_UP_THRESHOLD) {
+            LOG_DEBUG("  Navmesh is significantly below terrain, but keeping navmesh Z to follow the walkable surface (e.g., a road in a ravine).");
+        }
+        else {
+            // If the navmesh is above ground (diff > 0), or only slightly below, we trust the navmesh height.
+            // It could be a bridge, a building floor, or just a valid walkable surface on a slope.
+            LOG_DEBUG("  Navmesh height is valid (at or above ground). Keeping navmesh Z.");
+        }
+    } else {
+        LOG_DEBUG("  No valid ground height found - keeping navmesh Z");
     }
 
     return worldNearest;
@@ -984,11 +1124,11 @@ Vector3 NavigationManager::EnsureAboveGround(const Vector3& pos, uint32_t mapId)
     if (effectiveMapId == 0) {
         effectiveMapId = GetCurrentMapId();
     }
-    if (!m_vmapManager || !m_vmapManager->IsLoaded()) {
-        return pos;
-    }
 
-    float vmapZ = m_vmapManager->GetGroundHeight(pos, effectiveMapId);
+    float vmapZ = -FLT_MAX;
+    if (m_vmapManager && m_vmapManager->IsLoaded()) {
+        vmapZ = m_vmapManager->GetGroundHeight(pos, effectiveMapId);
+    }
 
     float terrainZ = -FLT_MAX;
     if (m_mapHeightManager) {
@@ -996,15 +1136,20 @@ Vector3 NavigationManager::EnsureAboveGround(const Vector3& pos, uint32_t mapId)
     }
 
     float finalGroundZ = std::max(terrainZ, vmapZ);
-
-    if (finalGroundZ > -FLT_MAX && pos.z < finalGroundZ - 0.2f) {
-        Vector3 newPos = pos;
-        newPos.z = finalGroundZ + 0.05f;
-        LOG_DEBUG("EnsureAboveGround: Adjusted Z from " + std::to_string(pos.z) + " to " + std::to_string(newPos.z));
-        return newPos;
+    if (finalGroundZ > -FLT_MAX) {
+        float diff = pos.z - finalGroundZ;
+        
+        // Only raise when significantly below ground (more than 3 yards)
+        // This matches the logic in AdjustToSurface
+        const float PULL_UP_THRESHOLD = 3.0f;
+        
+        if (diff < -PULL_UP_THRESHOLD) {
+            Vector3 newPos = pos;
+            newPos.z = finalGroundZ;
+            return newPos;
+        }
     }
 
-    // No adjustment needed or no ground found
     return pos;
 }
 
@@ -1070,108 +1215,82 @@ void NavigationManager::HumanizePath(NavigationPath& path, const PathfindingOpti
         return; // Need at least 3 points to humanize
     }
     
-    std::vector<Waypoint> humanizedWaypoints;
-    humanizedWaypoints.reserve(path.waypoints.size() * 2); // May add extra points
+    std::vector<Waypoint> processedWaypoints;
+    processedWaypoints.reserve(path.waypoints.size() * 2);
 
-    // Keep the start point
-    humanizedWaypoints.push_back(path.waypoints[0]);
+    // --- Step 1: Corner Smoothing ---
+    if (options.cornerCutting != 0.0f) {
+        // Keep the start point
+        processedWaypoints.push_back(path.waypoints[0]);
 
-    for (size_t i = 1; i < path.waypoints.size() - 1; ++i) {
-        const Vector3& prev = path.waypoints[i-1].position;
-        const Vector3& current = path.waypoints[i].position;
-        const Vector3& next = path.waypoints[i+1].position;
-
-        // Apply corner cutting if enabled
-        if (options.cornerCutting != 0.0f) {
-            Vector3 smoothed = SmoothCorner(prev, current, next, options.cornerCutting);
-            humanizedWaypoints.emplace_back(smoothed);
-        } else {
-            humanizedWaypoints.push_back(path.waypoints[i]);
+        for (size_t i = 1; i < path.waypoints.size() - 1; ++i) {
+            const Vector3& prev = path.waypoints[i-1].position;
+            const Vector3& current = path.waypoints[i].position;
+            const Vector3& next = path.waypoints[i+1].position;
+            
+            // Get the smoothed point (it will be floating)
+            Vector3 smoothed = SmoothCorner(prev, current, next, options.cornerCutting, options.mapId);
+            processedWaypoints.emplace_back(smoothed);
         }
+        // Keep the end point
+        processedWaypoints.push_back(path.waypoints.back());
+
+        // Update the path with the smoothed waypoints before next steps
+        path.waypoints = std::move(processedWaypoints);
     }
 
-    // Keep the end point
-    humanizedWaypoints.push_back(path.waypoints.back());
-
-    // Apply wall padding if specified
+    // --- Step 2: Wall Padding ---
     if (options.wallPadding > 0.1f) {
-        ApplyWallPadding(path, options.wallPadding);
+        ApplyWallPadding(path, options.wallPadding, options.mapId);
     }
 
-    // Apply elevation smoothing if enabled
+    // --- Step 3: Elevation Smoothing ---
     if (options.maxElevationChange > 0.0f) {
         ApplyElevationSmoothing(path, options);
     }
-
-    path.waypoints = std::move(humanizedWaypoints);
+    
+    // --- FINAL, CRITICAL STEP: Re-snap ALL waypoints to the ground ---
+    // This guarantees that any modifications from the steps above are
+    // corrected to the final ground height.
+    for (auto& waypoint : path.waypoints) {
+        waypoint.position = AdjustToSurface(waypoint.position, options.mapId);
+    }
 }
 
-Vector3 NavigationManager::SmoothCorner(const Vector3& prev, const Vector3& current, const Vector3& next, float cornerFactor) {
+Vector3 NavigationManager::SmoothCorner(const Vector3& prev, const Vector3& current, const Vector3& next, float cornerFactor, uint32_t mapId) {
+    // This function now ONLY calculates the new position.
+    // The final snapping to ground is handled by HumanizePath.
     if (cornerFactor == 0.0f) return current;
 
-    // Search extents for navmesh projection (2 yards horizontal, 5 yards vertical)
-    const float extents[3] = {2.0f, 5.0f, 2.0f};
-    
-    // Calculate vectors to previous and next waypoints
     Vector3 toPrev = (prev - current).Normalized();
     Vector3 toNext = (next - current).Normalized();
     
-    // Calculate the angle between the vectors
     float dot = toPrev.Dot(toNext);
-    dot = std::max(-1.0f, std::min(1.0f, dot)); // Clamp to avoid numerical issues
+    dot = std::max(-1.0f, std::min(1.0f, dot));
     
+    Vector3 finalPos = current;
+
     if (cornerFactor > 0.0f) {
-        // POSITIVE: Smooth corners (more human-like)
-        // Only smooth sharp corners (less than 120 degrees)
-        if (dot < -0.5f) { // Sharp corner (greater than 120 degrees turn)
+        if (dot < -0.5f) { // Sharp corner
             Vector3 smoothDirection = (toPrev + toNext).Normalized();
-            
-            // Use conservative smoothing distance
             float maxSmoothDistance = std::min(prev.Distance(current), next.Distance(current)) * 0.3f;
             float smoothDistance = maxSmoothDistance * cornerFactor;
-            
-            Vector3 smoothedPos = current + smoothDirection * smoothDistance;
-            
-            // Validate the smoothed position is still accessible
-            Vector3 recastPos = WowToRecast(smoothedPos);
-            dtPolyRef polyRef;
-            float closestPoint[3];
-            
-            if (dtStatusSucceed(m_navMeshQuery->findNearestPoly(&recastPos.x, extents, m_filter, &polyRef, closestPoint))) {
-                return smoothedPos;
-            }
+            finalPos = current + smoothDirection * smoothDistance;
         }
     } else {
-        // NEGATIVE: Make corners more angular/direct (robot-like)
-        float angularFactor = -cornerFactor; // Convert to positive for calculations
-        
-        // For any corner that isn't perfectly straight
-        if (dot < 0.95f) { // Any corner with more than ~18 degrees
-            // Calculate the "inside" direction of the corner
+        float angularFactor = -cornerFactor;
+        if (dot < 0.95f) { // Any corner
             Vector3 cornerDirection = (toPrev + toNext).Normalized();
-            
-            // Move AWAY from the corner direction to make it more angular
             Vector3 awayFromCorner = cornerDirection * (-1.0f);
-            
-            // Calculate push distance based on the sharpness of the corner
-            float cornerSharpness = (1.0f - dot) * 0.5f; // 0 to 1, where 1 is sharpest
+            float cornerSharpness = (1.0f - dot) * 0.5f;
             float maxPushDistance = std::min(prev.Distance(current), next.Distance(current)) * 0.2f;
             float pushDistance = maxPushDistance * angularFactor * cornerSharpness;
-            
-            Vector3 angularPos = current + awayFromCorner * pushDistance;
-            
-            // Validate the angular position is still accessible
-            Vector3 recastPos = WowToRecast(angularPos);
-            dtPolyRef polyRef;
-            float closestPoint[3];
-            
-            if (dtStatusSucceed(m_navMeshQuery->findNearestPoly(&recastPos.x, extents, m_filter, &polyRef, closestPoint))) {
-                return angularPos;
-            }
+            finalPos = current + awayFromCorner * pushDistance;
         }
     }
     
-    return current;
+    // Return the calculated position without snapping.
+    return finalPos;
 }
 
 // VMap collision detection methods
@@ -1425,55 +1544,44 @@ std::vector<std::pair<uint32_t, std::string>> NavigationManager::GetAllMapNames(
     return result;
 }
 
-void NavigationManager::ApplyWallPadding(NavigationPath& path, float padding) {
+void NavigationManager::ApplyWallPadding(NavigationPath& path, float padding, uint32_t mapId) {
+    // This function now ONLY calculates the new position.
+    // The final snapping to ground is handled by HumanizePath.
     if (!m_navMeshQuery || path.waypoints.size() < 2 || padding <= 0.01f) {
         return;
     }
 
-    // We need the navmesh from the currently loaded map
     if (m_loadedMaps.empty()) {
         LOG_WARNING("ApplyWallPadding: No map loaded, cannot perform wall padding.");
         return;
     }
-    const dtNavMesh* navMesh = m_loadedMaps.begin()->second.navMesh;
-    if (!navMesh) {
-        LOG_WARNING("ApplyWallPadding: Current map has no valid navmesh.");
-        return;
-    }
 
-    const float extents[3] = {2.0f, 4.0f, 2.0f}; // Search extents for findNearestPoly
-    const int maxIters = 6;
+    const float extents[3] = {2.0f, 4.0f, 2.0f};
     int adjustedCount = 0;
 
-    // Iterate all waypoints except the first and last, which are fixed start/end points
     for (size_t i = 1; i < path.waypoints.size() - 1; ++i) {
         Vector3 recastPos = WowToRecast(path.waypoints[i].position);
         bool moved = false;
 
-        for (int iter = 0; iter < maxIters; ++iter) {
+        for (int iter = 0; iter < 6; ++iter) {
             dtPolyRef polyRef;
             float closest[3];
-            // Find the polygon under the current position
             if (dtStatusFailed(m_navMeshQuery->findNearestPoly(&recastPos.x, extents, m_filter, &polyRef, closest)) || !polyRef)
-                break; // cannot project – abort
+                break;
 
             float hitDist = 0.0f;
             float hitNormal[3];
-            // Check distance to the nearest wall on that polygon
             if (dtStatusFailed(m_navMeshQuery->findDistanceToWall(polyRef, closest, padding + 0.1f, m_filter, &hitDist, nullptr, hitNormal)))
-                break; // error
+                break;
 
-            // If we are far enough from the wall, we are done with this waypoint
             if (hitDist >= padding)
                 break;
 
-            // We are too close. Push the point away from the wall, purely on the horizontal plane.
-            float push = (padding - hitDist) * 1.05f; // Small multiplier to ensure we clear the padding threshold
+            float push = (padding - hitDist) * 1.05f;
             recastPos.x += hitNormal[0] * push;
-            recastPos.z += hitNormal[2] * push; // Only push on X and Z
+            recastPos.z += hitNormal[2] * push;
 
-            // Now that we've moved the point horizontally, we MUST find its new height on the navmesh
-            // to prevent creating a steep, unnatural slope.
+            // Project to navmesh height, but don't do the full ground snap here.
             float newHeight = recastPos.y;
             if (dtStatusSucceed(m_navMeshQuery->getPolyHeight(polyRef, &recastPos.x, &newHeight))) {
                 recastPos.y = newHeight;
@@ -1581,12 +1689,12 @@ static void AnalyzeNavMeshTiles(const dtNavMesh* navMesh) {
 }
 
 bool NavigationManager::SegmentHitsObstacle(const Vector3& a, const Vector3& b, uint32_t mapId) {
-    // SIMPLIFIED OBSTACLE DETECTION - let nav-mesh handle most obstacle avoidance
-    // Only check for major issues that nav-mesh might miss
-    
     if (!m_navMeshQuery || m_loadedMaps.empty()) {
         return false;
     }
+
+    uint32_t effectiveMapId = mapId;
+    if (effectiveMapId == 0) effectiveMapId = GetCurrentMapId();
 
     const dtNavMesh* navMesh = m_loadedMaps.begin()->second.navMesh;
     if (!navMesh) return false;
@@ -1611,13 +1719,15 @@ bool NavigationManager::SegmentHitsObstacle(const Vector3& a, const Vector3& b, 
         return true; // Detour found unwalkable edge
     }
 
-    // OPTIONAL: VMap collision test for doodads/trees not in nav-mesh
+    // VMap collision test for doodads/trees not in nav-mesh
     if (m_vmapManager && m_vmapManager->IsLoaded()) {
-        if (!m_vmapManager->IsInLineOfSight(a, b, mapId))
+        if (!m_vmapManager->IsInLineOfSight(a, b, effectiveMapId))
             return true;
+    }
 
-        // Extra terrain-surface check – ensure the straight line does not dive under ground.
-        const float STEP = 1.5f; // yards
+    // Terrain-surface check – ensure the straight line does not dive under ground.
+    if (m_mapHeightManager) {
+        const float STEP = 2.0f; // yards
         Vector3 dir = b - a;
         float len = dir.Length();
         if (len > STEP) {
@@ -1625,9 +1735,11 @@ bool NavigationManager::SegmentHitsObstacle(const Vector3& a, const Vector3& b, 
             int samples = static_cast<int>(len / STEP);
             for (int s = 1; s < samples; ++s) {
                 Vector3 p = a + dir * (STEP * s);
-                float ground = m_vmapManager->GetGroundHeight(p, mapId);
-                if (ground != -FLT_MAX && ground - p.z > 0.3f) {
-                    return true; // ground above path – segment underground
+                float terrainZ = m_mapHeightManager->GetHeight(effectiveMapId, p);
+                // Check if the path point 'p' is significantly under the terrain at that XY
+                if (terrainZ > -FLT_MAX && p.z < terrainZ - 0.5f) {
+                    LOG_DEBUG("SegmentHitsObstacle: Path goes underground at (" + std::to_string(p.x) + "," + std::to_string(p.y) + "). Path Z: " + std::to_string(p.z) + ", Terrain Z: " + std::to_string(terrainZ));
+                    return true; // Blocked by terrain
                 }
             }
         }
@@ -1693,7 +1805,7 @@ Vector3 NavigationManager::FindSafePosition(const Vector3& from, const Vector3& 
     for (float t = MAX_FRACTION; t >= MIN_FRACTION; t -= 0.1f) {
         Vector3 mid = from + dir * (dist * t);
         
-        bool hasLoS = !m_vmapManager || m_vmapManager->IsInLineOfSight(from, mid, mapId);
+        bool hasLoS = !SegmentHitsObstacle(from, mid, mapId);
         
         if (hasLoS) {
             if (auto projected = projectToNavMesh(mid)) {
@@ -1707,7 +1819,7 @@ Vector3 NavigationManager::FindSafePosition(const Vector3& from, const Vector3& 
         for (int side = -1; side <= 1; side += 2) {
             Vector3 cand = to + perp * (offset * side);
             
-            bool hasLoS = !m_vmapManager || m_vmapManager->IsInLineOfSight(from, cand, mapId);
+            bool hasLoS = !SegmentHitsObstacle(from, cand, mapId);
             
             if (hasLoS) {
                 if (auto projected = projectToNavMesh(cand)) {
@@ -1823,4 +1935,4 @@ Vector3 NavigationManager::AttemptObstacleBypass(const Vector3& start, const Vec
     return blockedEnd; // No bypass found
 }
 
-} // namespace Navigation 
+} // namespace Navigation

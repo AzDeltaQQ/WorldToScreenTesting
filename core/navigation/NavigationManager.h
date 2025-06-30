@@ -11,6 +11,7 @@
 #include "VMapManager.h"
 #include "../../TrinityCore-3.3.5/dep/recastnavigation/Detour/Include/DetourNavMesh.h"
 #include "../../TrinityCore-3.3.5/dep/recastnavigation/Detour/Include/DetourNavMeshQuery.h"
+#include "MapHeightManager.h"
 
 // Forward declarations for Detour types (already provided by Detour headers)
 struct dtNavMesh;
@@ -98,10 +99,10 @@ public:
 
     // Humanization methods for natural pathfinding
     void HumanizePath(NavigationPath& path, const PathfindingOptions& options);
-    Vector3 SmoothCorner(const Vector3& prev, const Vector3& current, const Vector3& next, float cornerFactor);
+    Vector3 SmoothCorner(const Vector3& prev, const Vector3& current, const Vector3& next, float cornerFactor, uint32_t mapId);
 
     // Push waypoints away from nearby walls by a minimum padding distance
-    void ApplyWallPadding(NavigationPath& path, float padding);
+    void ApplyWallPadding(NavigationPath& path, float padding, uint32_t mapId);
 
     // VMap-based validation to split segments that cross collision geometry
     bool SegmentHitsObstacle(const Vector3& a, const Vector3& b, uint32_t mapId = 0);
@@ -161,6 +162,9 @@ private:
 
     // Error handling
     std::string m_lastError;
+
+    // MapHeightManager
+    std::unique_ptr<MapHeightManager> m_mapHeightManager;
 };
 
 // Convenience macros

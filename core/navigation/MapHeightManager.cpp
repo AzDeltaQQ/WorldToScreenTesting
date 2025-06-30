@@ -161,18 +161,28 @@ float MapHeightManager::GetHeight(uint32_t mapId, const Vector3& pos) {
 
     int tileX = static_cast<int>(std::floor((ZEROPOINT - worldY) / TILE_SIZE));
     int tileY = static_cast<int>(std::floor((ZEROPOINT - worldX) / TILE_SIZE));
-    if (tileX < 0 || tileX >= 64 || tileY < 0 || tileY >= 64)
+    
+    LOG_DEBUG("MapHeightManager: GetHeight(" + std::to_string(worldX) + ", " + std::to_string(worldY) + ") -> tile(" + std::to_string(tileX) + ", " + std::to_string(tileY) + ")");
+    
+    if (tileX < 0 || tileX >= 64 || tileY < 0 || tileY >= 64) {
+        LOG_DEBUG("MapHeightManager: Tile coordinates out of bounds");
         return -FLT_MAX;
+    }
 
-    if (!LoadTile(mapId, tileX, tileY))
+    if (!LoadTile(mapId, tileX, tileY)) {
+        LOG_DEBUG("MapHeightManager: Failed to load tile");
         return -FLT_MAX;
+    }
 
     uint64_t key = MakeKey(mapId, tileX, tileY);
     auto it = m_tiles.find(key);
     if (it == m_tiles.end()) return -FLT_MAX;
 
     const TileData& td = it->second;
-    if (td.flat) return td.minHeight;
+    if (td.flat) {
+        LOG_DEBUG("MapHeightManager: Using flat height: " + std::to_string(td.minHeight));
+        return td.minHeight;
+    }
 
     // local coordinates inside tile
     float localY = (ZEROPOINT - worldY) - tileX * TILE_SIZE; // along Y axis -> tileX
@@ -201,6 +211,10 @@ float MapHeightManager::GetHeight(uint32_t mapId, const Vector3& pos) {
     float h11 = sample(ix+1, iy+1);
 
     float h = (1-fx)*(1-fy)*h00 + fx*(1-fy)*h10 + (1-fx)*fy*h01 + fx*fy*h11;
+    
+    LOG_DEBUG("MapHeightManager: Interpolated height: " + std::to_string(h) + " from corners(" + 
+              std::to_string(h00) + ", " + std::to_string(h10) + ", " + std::to_string(h01) + ", " + std::to_string(h11) + ")");
+    
     return h;
 }
 
