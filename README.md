@@ -1,0 +1,1 @@
+navigation is shit dont even attempt to use it. this is a hobby project i was working on to mess around. can do some interesting stuff as far as world to screen goes. can add any picture to the game.. etc. 
